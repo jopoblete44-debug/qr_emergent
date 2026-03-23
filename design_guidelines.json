@@ -1,0 +1,156 @@
+{
+  "identity": {
+    "name": "E1",
+    "archetype": "The Anti-AI Designer",
+    "philosophy": "Fusion over Imitation. Emotion First. Content is King.",
+    "anti_patterns": [
+      "No generic 'SaaS Blue' gradients",
+      "No centered text everywhere",
+      "No 'Inter' for headings",
+      "No default Shadcn cards without customization"
+    ]
+  },
+  "brand_strategy": {
+    "emotional_tone": "Trustworthy, Immediate, Modern, Secure",
+    "visual_style": "Minimalist Tech-Utility",
+    "themes": {
+      "strategy": "Dual Theme (Light Default for Public/Profiles, Toggle for Dashboard)",
+      "light_mode": "Clean, medical-grade white with slate contrasts",
+      "dark_mode": "Deep charcoal/obsidian (not pure black) for night-time readability"
+    }
+  },
+  "typography": {
+    "headings": {
+      "family": "Manrope, sans-serif",
+      "usage": "Headings, Hero Sections, Big Numbers",
+      "weights": ["600", "800"],
+      "tracking": "tracking-tight"
+    },
+    "body": {
+      "family": "Inter, sans-serif",
+      "usage": "Paragraphs, UI Elements, Data Tables",
+      "weights": ["400", "500"],
+      "tracking": "tracking-normal"
+    },
+    "mono": {
+      "family": "JetBrains Mono, monospace",
+      "usage": "IDs, Coordinates, Hash Codes",
+      "weights": ["400"]
+    }
+  },
+  "color_palette": {
+    "primary": {
+      "name": "Electric Indigo",
+      "hex": "#4f46e5",
+      "tailwind": "indigo-600",
+      "usage": "Primary Actions, Brand Identity"
+    },
+    "emergency": {
+      "name": "Signal Red",
+      "hex": "#ef4444",
+      "tailwind": "red-500",
+      "usage": "Emergency Alerts, Medical Critical Info, Delete Actions"
+    },
+    "success": {
+      "name": "Mint Green",
+      "hex": "#10b981",
+      "tailwind": "emerald-500",
+      "usage": "Active Status, Success States"
+    },
+    "neutral": {
+      "light": "#f8fafc",
+      "dark": "#0f172a",
+      "usage": "Backgrounds"
+    },
+    "gradients": {
+      "hero": "bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500",
+      "overlay": "bg-gradient-to-t from-black/80 to-transparent"
+    }
+  },
+  "spacing_system": {
+    "base_scale": "Tailwind Default",
+    "containers": {
+      "padding_mobile": "p-4",
+      "padding_desktop": "p-8 or p-12",
+      "gap_default": "gap-6"
+    },
+    "rules": "Use 2x more whitespace than typical. Containers with borders MUST have p-6 or p-8 internal padding."
+  },
+  "components": {
+    "buttons": {
+      "style": "Pill-shaped or slightly rounded (rounded-lg)",
+      "interactions": "scale-95 on click, brightness-110 on hover",
+      "shadows": "shadow-lg shadow-indigo-500/20"
+    },
+    "cards": {
+      "style": "Flat, 1px border (border-slate-200 dark:border-slate-800)",
+      "hover": "border-indigo-500/50 shadow-md transition-all duration-300",
+      "radius": "rounded-xl"
+    },
+    "inputs": {
+      "style": "h-12 bg-slate-50 dark:bg-slate-900 border-slate-200 focus:ring-2 focus:ring-indigo-500",
+      "radius": "rounded-lg"
+    },
+    "profiles_public": {
+      "style": "Mobile-first, high contrast cards",
+      "emergency_button": "Fixed bottom or top prominent button, Red/White contrast"
+    }
+  },
+  "layout_strategies": {
+    "marketing": {
+      "grid": "Bento Grid (mix of col-span-1, col-span-2)",
+      "hero": "Left-aligned text, Right-aligned interactive/3D or abstract visual",
+      "sections": "Alternating backgrounds (White -> Slate-50 -> White)"
+    },
+    "dashboard": {
+      "structure": "Sidebar (Left) + Topbar + Content Area",
+      "grid": "Screenfit Dashboard (avoid scroll if possible for main stats)",
+      "cards": "Dense information, clear hierarchy"
+    },
+    "mobile_profile": {
+      "structure": "Single Column, Stacked Cards",
+      "header": "Sticky Profile Header",
+      "navigation": "Minimal or None (Focus on content)"
+    }
+  },
+  "visual_assets": {
+    "icons_library": "lucide-react",
+    "image_urls": {
+      "landing_hero": "https://images.unsplash.com/photo-1746470427617-91e8dd28298d?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "medical_doctor": "https://images.pexels.com/photos/6050261/pexels-photo-6050261.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "elderly_user": "https://images.pexels.com/photos/7544789/pexels-photo-7544789.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "pet_dog": "https://images.pexels.com/photos/36491676/pexels-photo-36491676.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "car_interior": "https://images.unsplash.com/photo-1665491641078-1f8b275c8108?crop=entropy&cs=srgb&fm=jpg&q=85",
+      "restaurant_chef": "https://images.pexels.com/photos/36430089/pexels-photo-36430089.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "hotel_lobby": "https://images.pexels.com/photos/5288134/pexels-photo-5288134.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "qr_scanning_abstract": "https://images.unsplash.com/photo-1746470427686-4c3551f3d689?crop=entropy&cs=srgb&fm=jpg&q=85"
+    }
+  },
+  "universal_guidelines": [
+    "DO NOT use transparent backgrounds for headers/dropdowns with content underneath.",
+    "ALL interactive elements MUST have a data-testid attribute.",
+    "Use 'sonner' for toasts.",
+    "Use 'lucide-react' for icons.",
+    "Ensure 4.5:1 contrast ratio for all text.",
+    "Mobile images max-height: 80vh.",
+    "Transitions: transform 0.2s ease, opacity 0.2s ease (NO transition: all)."
+  ],
+  "instructions_to_main_agent": {
+    "setup": [
+      "Install lucide-react, sonner, framer-motion, recharts, react-qr-code if not present.",
+      "Configure Tailwind colors to match the palette.",
+      "Set up font families in tailwind.config.js."
+    ],
+    "implementation_order": [
+      "1. Setup ThemeProvider (Light/Dark)",
+      "2. Create atomic UI components (Button, Card, Input) with E1 styling",
+      "3. Build Layouts (DashboardLayout, PublicProfileLayout, MarketingLayout)",
+      "4. Implement Pages (Landing, Dashboard, Profile View)"
+    ],
+    "specific_features": {
+      "qr_generator": "Use 'react-qr-code' or similar. Ensure it has a white border/padding for scannability in dark mode.",
+      "maps": "Use 'react-leaflet' or 'mapbox-gl' (if key available), default to free OpenStreetMap tiles.",
+      "pdf_export": "Use 'react-to-print' or 'jspdf' for menu/profile downloading."
+    }
+  }
+}
