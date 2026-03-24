@@ -1,7 +1,7 @@
 import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import {
-  Heart, User, MapPin, Globe, Shield, Star, Clock, Wifi, Phone, Mail,
+  Heart, User, MapPin, Globe, Shield, Star, Clock, Calendar, Wifi, Phone, Mail,
   Building, CreditCard, Camera, FileText, MessageSquare, Bell, AlertTriangle,
   Coffee, Utensils, Home, Car, Baby, Dog
 } from 'lucide-react';
