@@ -5,10 +5,12 @@ import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { Switch } from '../components/ui/switch';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { ProfileTemplateEditor } from '../components/ProfileTemplateEditor';
 import { TemplatePreview } from '../components/TemplatePreview';
 import { toast } from 'sonner';
-import { FileEdit, Save, Smartphone, ArrowLeft, Heart, User, MapPin, Wifi, Utensils, Building, Globe, Calendar, Coffee, MessageSquare, Star, CreditCard, Dog, Car, Camera } from 'lucide-react';
+import { FileEdit, Save, Smartphone, ArrowLeft, Heart, User, MapPin, Wifi, Utensils, Building, Globe, Calendar, Coffee, MessageSquare, Star, CreditCard, Dog, Car } from 'lucide-react';
 import { API_BASE } from '../utils/api';
 
 const ICON_COMPONENTS = {
@@ -18,6 +20,84 @@ const ICON_COMPONENTS = {
 };
 
 const cloneDeep = (value) => JSON.parse(JSON.stringify(value));
+const TEMPLATE_MAX_FLOATING_BUTTONS = 3;
+const TEMPLATE_FLOATING_BUTTON_OPTIONS = {
+  personal: [
+    { value: 'call_contact', label: 'Llamar contacto' },
+    { value: 'send_location', label: 'Enviar ubicación' },
+    { value: 'call_emergency', label: 'Llamar emergencia' },
+    { value: 'whatsapp', label: 'WhatsApp' },
+    { value: 'share_profile', label: 'Compartir perfil' },
+  ],
+  business: [
+    { value: 'send_survey', label: 'Responder encuesta' },
+    { value: 'rate_restaurant', label: 'Calificar negocio' },
+    { value: 'view_catalog_pdf', label: 'Ver catálogo' },
+    { value: 'whatsapp', label: 'WhatsApp' },
+    { value: 'call_business', label: 'Llamar negocio' },
+    { value: 'website', label: 'Sitio web' },
+  ],
+};
+const DEFAULT_TEMPLATE_DISPLAY_OPTIONS = {
+  show_profile_type_badge: true,
+  show_business_banner: true,
+  show_floating_actions: true,
+  show_lead_form: true,
+  show_manual_location_button: true,
+};
+
+const normalizeTemplatePublicSettings = (rawValue, category) => {
+  const normalizedCategory = category === 'business' ? 'business' : 'personal';
+  const options = TEMPLATE_FLOATING_BUTTON_OPTIONS[normalizedCategory] || TEMPLATE_FLOATING_BUTTON_OPTIONS.personal;
+  const allowedValues = new Set(options.map((option) => option.value));
+  const source = rawValue && typeof rawValue === 'object' ? rawValue : {};
+  const requestedButtons = Array.isArray(source.floating_buttons)
+    ? source.floating_buttons
+    : Array.isArray(source.floatingButtons)
+      ? source.floatingButtons
+      : [];
+
+  return {
+    request_location_automatically: Boolean(
+      source.request_location_automatically ?? source.requestLocationAutomatically
+    ),
+    top_profile_photo_enabled: Boolean(
+      source.top_profile_photo_enabled
+      ?? source.topProfilePhotoEnabled
+      ?? source.profile_photo_enabled
+    ),
+    top_profile_photo_shape: (() => {
+      const shape = String(
+        source.top_profile_photo_shape
+        ?? source.topProfilePhotoShape
+        ?? source.profile_photo_shape
+        ?? 'circle'
+      ).trim().toLowerCase();
+      if (shape === 'rounded' || shape === 'square') return shape;
+      return 'circle';
+    })(),
+    floating_buttons: requestedButtons
+      .map((item) => String(item || '').trim().toLowerCase())
+      .filter((item, index, array) => item && allowedValues.has(item) && array.indexOf(item) === index)
+      .slice(0, TEMPLATE_MAX_FLOATING_BUTTONS),
+  };
+};
+
+const normalizeTemplateDisplayOptions = (rawValue, category) => {
+  const raw = rawValue && typeof rawValue === 'object' ? rawValue : {};
+  const normalizedCategory = category === 'business' ? 'business' : 'personal';
+  return {
+    show_profile_type_badge: Boolean(raw.show_profile_type_badge ?? raw.showProfileTypeBadge ?? DEFAULT_TEMPLATE_DISPLAY_OPTIONS.show_profile_type_badge),
+    show_business_banner: normalizedCategory === 'business'
+      ? Boolean(raw.show_business_banner ?? raw.showBusinessBanner ?? DEFAULT_TEMPLATE_DISPLAY_OPTIONS.show_business_banner)
+      : false,
+    show_floating_actions: Boolean(raw.show_floating_actions ?? raw.showFloatingActions ?? DEFAULT_TEMPLATE_DISPLAY_OPTIONS.show_floating_actions),
+    show_lead_form: Boolean(raw.show_lead_form ?? raw.showLeadForm ?? (normalizedCategory === 'business')),
+    show_manual_location_button: normalizedCategory === 'personal'
+      ? Boolean(raw.show_manual_location_button ?? raw.showManualLocationButton ?? DEFAULT_TEMPLATE_DISPLAY_OPTIONS.show_manual_location_button)
+      : false,
+  };
+};
 
 const mergeFields = (existingFields = [], defaultFields = []) => {
   const mergedFields = Array.isArray(existingFields) ? [...existingFields] : [];
@@ -79,7 +159,17 @@ const mergeTemplatesByCategory = (existingTemplates = [], defaultTemplates = [])
   const mergedFromDefaults = defaultList.map((defaultTemplate) => {
     const existingTemplate = existingList.find((template) => template?.key === defaultTemplate.key);
     if (!existingTemplate) {
-      return cloneDeep(defaultTemplate);
+      return {
+        ...cloneDeep(defaultTemplate),
+        default_public_settings: normalizeTemplatePublicSettings(
+          defaultTemplate.default_public_settings,
+          defaultTemplate.category
+        ),
+        display_options: normalizeTemplateDisplayOptions(
+          defaultTemplate.display_options,
+          defaultTemplate.category
+        ),
+      };
     }
     return {
       ...cloneDeep(defaultTemplate),
@@ -94,21 +184,32 @@ const mergeTemplatesByCategory = (existingTemplates = [], defaultTemplates = [])
         ...(existingTemplate.theme || {}),
       },
       sections: mergeSections(existingTemplate.sections, defaultTemplate.sections),
+      default_public_settings: normalizeTemplatePublicSettings(
+        existingTemplate.default_public_settings ?? defaultTemplate.default_public_settings,
+        existingTemplate.category || defaultTemplate.category
+      ),
+      display_options: normalizeTemplateDisplayOptions(
+        existingTemplate.display_options ?? defaultTemplate.display_options,
+        existingTemplate.category || defaultTemplate.category
+      ),
     };
   });
 
   const customTemplates = existingList.filter(
     (existingTemplate) => !defaultList.some((defaultTemplate) => defaultTemplate.key === existingTemplate?.key)
   );
-  return [...mergedFromDefaults, ...customTemplates];
+  const normalizedCustomTemplates = customTemplates.map((template) => ({
+    ...template,
+    default_public_settings: normalizeTemplatePublicSettings(template?.default_public_settings, template?.category),
+    display_options: normalizeTemplateDisplayOptions(template?.display_options, template?.category),
+  }));
+  return [...mergedFromDefaults, ...normalizedCustomTemplates];
 };
 
 const mergeTemplatesWithDefaults = (savedConfig) => ({
   personal: mergeTemplatesByCategory(savedConfig?.personal, DEFAULT_TEMPLATES.personal),
   business: mergeTemplatesByCategory(savedConfig?.business, DEFAULT_TEMPLATES.business),
 });
-
-const IMAGE_FIELD_PATTERN = /(photo|image|logo|avatar|foto|imagen|banner|cover)/i;
 
 const createPreviewImage = (label, accent = '#4f46e5', background = '#eef2ff') =>
   `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(`
@@ -119,20 +220,13 @@ const createPreviewImage = (label, accent = '#4f46e5', background = '#eef2ff') =
       <rect x="176" y="216" width="288" height="18" rx="9" fill="${accent}" fill-opacity="0.18"/>
       <rect x="228" y="246" width="184" height="14" rx="7" fill="${accent}" fill-opacity="0.10"/>
       <text x="320" y="146" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="700" fill="${accent}">
-        Upload only
+        Vista previa
       </text>
       <text x="320" y="302" text-anchor="middle" font-family="Arial, sans-serif" font-size="26" font-weight="700" fill="${accent}">
         ${label}
       </text>
     </svg>
   `)}`;
-
-const countImageFields = (template) =>
-  template?.sections?.reduce((sum, section) => (
-    sum + ((section.fields || []).filter((field) =>
-      field?.type === 'image' || IMAGE_FIELD_PATTERN.test(field?.name || field?.id || '')
-    ).length)
-  ), 0) || 0;
 
 const DEFAULT_TEMPLATES = {
   personal: [
@@ -409,8 +503,11 @@ export const AdminProfileEditorPage = () => {
 
   const loadConfig = async () => {
     try {
-      const response = await fetch(`${API_BASE}/admin/profile-types-config`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
+      const response = await fetch(`${API_BASE}/admin/profile-types-config?_t=${Date.now()}`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          'Cache-Control': 'no-cache',
+        },
       });
       if (response.ok) {
         const data = await response.json();
@@ -435,6 +532,7 @@ export const AdminProfileEditorPage = () => {
       });
       if (!response.ok) throw new Error('Failed');
       toast.success('Configuración guardada');
+      await loadConfig();
     } catch (e) {
       toast.error('Error al guardar');
     } finally {
@@ -450,6 +548,16 @@ export const AdminProfileEditorPage = () => {
   const selectedTemplate = selectedKey
     ? templates[selectedCategory]?.find(t => t.key === selectedKey)
     : null;
+  const selectedTemplateCategory = selectedCategory || selectedTemplate?.category || 'personal';
+  const selectedFloatingButtonOptions = TEMPLATE_FLOATING_BUTTON_OPTIONS[selectedTemplateCategory] || TEMPLATE_FLOATING_BUTTON_OPTIONS.personal;
+  const selectedTemplatePublicSettings = normalizeTemplatePublicSettings(
+    selectedTemplate?.default_public_settings,
+    selectedTemplateCategory
+  );
+  const selectedTemplateDisplayOptions = normalizeTemplateDisplayOptions(
+    selectedTemplate?.display_options,
+    selectedTemplateCategory
+  );
 
   const updateSelectedTemplate = (updatedTemplate) => {
     setTemplates(prev => ({
@@ -459,11 +567,44 @@ export const AdminProfileEditorPage = () => {
       ),
     }));
   };
+  const updateSelectedTemplatePublicSettings = (patch) => {
+    if (!selectedTemplate) return;
+    const mergedSettings = normalizeTemplatePublicSettings(
+      {
+        ...selectedTemplatePublicSettings,
+        ...patch,
+      },
+      selectedTemplateCategory
+    );
+    updateSelectedTemplate({ default_public_settings: mergedSettings });
+  };
+  const updateSelectedTemplateDisplayOptions = (patch) => {
+    if (!selectedTemplate) return;
+    const mergedOptions = normalizeTemplateDisplayOptions(
+      {
+        ...selectedTemplateDisplayOptions,
+        ...patch,
+      },
+      selectedTemplateCategory
+    );
+    updateSelectedTemplate({ display_options: mergedOptions });
+  };
+
+  const toggleSelectedTemplateFloatingButton = (buttonType) => {
+    const currentButtons = selectedTemplatePublicSettings.floating_buttons;
+    if (currentButtons.includes(buttonType)) {
+      updateSelectedTemplatePublicSettings({
+        floating_buttons: currentButtons.filter((item) => item !== buttonType),
+      });
+      return;
+    }
+    if (currentButtons.length >= TEMPLATE_MAX_FLOATING_BUTTONS) return;
+    updateSelectedTemplatePublicSettings({
+      floating_buttons: [...currentButtons, buttonType],
+    });
+  };
 
   const getIconComp = (name) => ICON_COMPONENTS[name] || Star;
-  const selectedImageFieldCount = selectedTemplate ? countImageFields(selectedTemplate) : 0;
-  const totalTemplates = (templates.personal?.length || 0) + (templates.business?.length || 0);
-
   const renderProfileCard = (category, template) => {
     const Icon = getIconComp(template.icon);
     const isActive = selectedKey === template.key;
@@ -510,64 +651,14 @@ export const AdminProfileEditorPage = () => {
               </h1>
               <p className="text-muted-foreground text-sm mt-1">
                 {selectedTemplate
-                  ? `Editando: ${selectedTemplate.label} - configurá campos, secciones, colores y una experiencia visual upload-only`
-                  : 'Configura los tipos de perfil, campos, secciones y una política visual centrada en upload-only'}
+                  ? `Editando: ${selectedTemplate.label}`
+                  : 'Configura tipos de perfil, campos, secciones y colores'}
               </p>
             </div>
             <Button onClick={handleSave} disabled={saving} data-testid="save-config-btn">
               <Save className="mr-2 h-4 w-4" />
               {saving ? 'Guardando...' : 'Guardar Todo'}
             </Button>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-3 mb-6">
-            <Card className="border-primary/15 bg-primary/5">
-              <CardContent className="p-4">
-                <div className="flex items-start gap-3">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-background text-primary shadow-sm">
-                    <Camera className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="font-semibold">Imágenes por upload</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      La vista previa usa placeholders locales y evita depender de URLs remotas hardcodeadas.
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="border-border/70">
-              <CardContent className="p-4">
-                <div className="flex items-start gap-3">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-muted text-foreground shadow-sm">
-                    <Smartphone className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="font-semibold">Preview móvil realista</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      Probás jerarquía visual, campos visibles y legibilidad antes de guardar.
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-            <Card className="border-border/70">
-              <CardContent className="p-4">
-                <div className="flex items-start gap-3">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-muted text-foreground shadow-sm">
-                    <FileEdit className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <p className="font-semibold">Cobertura actual</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {selectedTemplate
-                        ? `${selectedImageFieldCount} campos de imagen en esta plantilla.`
-                        : `${totalTemplates} plantillas disponibles entre perfiles personales y empresariales.`}
-                    </p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
           </div>
 
           {/* Profile selection grid */}
@@ -604,20 +695,127 @@ export const AdminProfileEditorPage = () => {
                 Volver a los tipos de perfil
               </Button>
 
-              <Card className="mb-4 border-primary/15 bg-primary/5">
-                <CardContent className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
-                  <div>
-                    <p className="font-semibold">Política visual para {selectedTemplate.label}</p>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Esta plantilla tiene {selectedImageFieldCount} campo{selectedImageFieldCount === 1 ? '' : 's'} de imagen y la preview usa recursos locales para reforzar el flujo upload-only.
-                    </p>
+              <Card className="mb-4">
+                <CardContent className="space-y-4 p-4">
+                  <div className="space-y-1">
+                    <p className="font-semibold">Comportamiento por defecto del QR público</p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Badge variant="secondary">Upload-only</Badge>
-                    <Badge variant="outline">{selectedTemplate.sections?.length || 0} secciones</Badge>
-                    <Badge variant="outline">
-                      {selectedTemplate.sections?.reduce((sum, section) => sum + (section.fields?.length || 0), 0) || 0} campos
-                    </Badge>
+
+                  <div className="flex items-center justify-between rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
+                    <div>
+                      <p className="text-sm font-medium">Solicitar ubicación automáticamente</p>
+                    </div>
+                    <Switch
+                      checked={selectedTemplatePublicSettings.request_location_automatically}
+                      onCheckedChange={(checked) => updateSelectedTemplatePublicSettings({ request_location_automatically: checked })}
+                    />
+                  </div>
+
+                  <div className="space-y-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="text-sm font-medium">Foto superior destacada</p>
+                        <p className="text-xs text-muted-foreground">Se muestra debajo del nombre del perfil.</p>
+                      </div>
+                      <Switch
+                        checked={selectedTemplatePublicSettings.top_profile_photo_enabled}
+                        onCheckedChange={(checked) => updateSelectedTemplatePublicSettings({ top_profile_photo_enabled: checked })}
+                      />
+                    </div>
+                    {selectedTemplatePublicSettings.top_profile_photo_enabled && (
+                      <div className="max-w-xs">
+                        <p className="text-xs text-muted-foreground mb-1">Forma predeterminada</p>
+                        <Select
+                          value={selectedTemplatePublicSettings.top_profile_photo_shape}
+                          onValueChange={(value) => updateSelectedTemplatePublicSettings({ top_profile_photo_shape: value })}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="circle">Circular</SelectItem>
+                            <SelectItem value="rounded">Redondeado</SelectItem>
+                            <SelectItem value="square">Cuadrado</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="space-y-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
+                    <p className="text-sm font-medium">Visibilidad de bloques</p>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="flex items-center justify-between rounded-md border border-border/60 bg-background px-3 py-2">
+                        <span className="text-xs">Mostrar tipo de perfil</span>
+                        <Switch
+                          checked={selectedTemplateDisplayOptions.show_profile_type_badge}
+                          onCheckedChange={(checked) => updateSelectedTemplateDisplayOptions({ show_profile_type_badge: checked })}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-md border border-border/60 bg-background px-3 py-2">
+                        <span className="text-xs">Botones flotantes</span>
+                        <Switch
+                          checked={selectedTemplateDisplayOptions.show_floating_actions}
+                          onCheckedChange={(checked) => updateSelectedTemplateDisplayOptions({ show_floating_actions: checked })}
+                        />
+                      </div>
+
+                      {selectedTemplateCategory === 'business' && (
+                        <>
+                          <div className="flex items-center justify-between rounded-md border border-border/60 bg-background px-3 py-2">
+                            <span className="text-xs">Banner negocio</span>
+                            <Switch
+                              checked={selectedTemplateDisplayOptions.show_business_banner}
+                              onCheckedChange={(checked) => updateSelectedTemplateDisplayOptions({ show_business_banner: checked })}
+                            />
+                          </div>
+                          <div className="flex items-center justify-between rounded-md border border-border/60 bg-background px-3 py-2">
+                            <span className="text-xs">Formulario de contacto</span>
+                            <Switch
+                              checked={selectedTemplateDisplayOptions.show_lead_form}
+                              onCheckedChange={(checked) => updateSelectedTemplateDisplayOptions({ show_lead_form: checked })}
+                            />
+                          </div>
+                        </>
+                      )}
+
+                      {selectedTemplateCategory === 'personal' && (
+                        <div className="flex items-center justify-between rounded-md border border-border/60 bg-background px-3 py-2">
+                          <span className="text-xs">Botón manual de ubicación</span>
+                          <Switch
+                            checked={selectedTemplateDisplayOptions.show_manual_location_button}
+                            onCheckedChange={(checked) => updateSelectedTemplateDisplayOptions({ show_manual_location_button: checked })}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-sm font-medium">Botones flotantes predeterminados</p>
+                      <span className="text-xs text-muted-foreground">
+                        {selectedTemplatePublicSettings.floating_buttons.length}/{TEMPLATE_MAX_FLOATING_BUTTONS}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                      {selectedFloatingButtonOptions.map((option) => {
+                        const active = selectedTemplatePublicSettings.floating_buttons.includes(option.value);
+                        return (
+                          <Button
+                            key={option.value}
+                            type="button"
+                            variant={active ? 'default' : 'outline'}
+                            className="justify-start"
+                            onClick={() => toggleSelectedTemplateFloatingButton(option.value)}
+                            disabled={!active && selectedTemplatePublicSettings.floating_buttons.length >= TEMPLATE_MAX_FLOATING_BUTTONS}
+                          >
+                            {option.label}
+                          </Button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </CardContent>
               </Card>

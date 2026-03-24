@@ -51,7 +51,7 @@ const steps = [
   {
     number: '02',
     title: 'Cargá datos e imágenes desde tu dispositivo',
-    description: 'Completá la información importante y mantené una experiencia upload-only.',
+    description: 'Completá la información importante de forma simple y rápida.',
   },
   {
     number: '03',

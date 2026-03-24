@@ -24,6 +24,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import ImageReader
 import re
+import secrets
 from urllib.parse import quote, urlparse
 import csv
 import smtplib
@@ -52,6 +53,8 @@ SUBSCRIPTION_PERIOD_DAYS: Dict[str, int] = {
     'monthly': 30,
     'yearly': 365,
 }
+PASSWORD_RESET_CODE_TTL_MINUTES = max(5, int(os.getenv('PASSWORD_RESET_CODE_TTL_MINUTES', '20') or '20'))
+PASSWORD_RESET_MAX_ATTEMPTS = max(3, int(os.getenv('PASSWORD_RESET_MAX_ATTEMPTS', '5') or '5'))
 
 # Create the main app
 app = FastAPI()
@@ -140,6 +143,14 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str
+    new_password: str = Field(min_length=6, max_length=128)
+
 class User(UserBase):
     model_config = ConfigDict(extra="ignore")
     id: str
@@ -184,6 +195,7 @@ class QRProfileBase(BaseModel):
     data: Dict[str, Any] = {}
     notification_config: Dict[str, Any] = {}
     public_settings: Dict[str, Any] = Field(default_factory=dict)
+    public_settings_customized: Optional[bool] = None
     expiration_date: Optional[str] = None  # ISO format date
 
 class QRProfileCreate(QRProfileBase):
@@ -198,6 +210,7 @@ class QRProfileUpdate(BaseModel):
     data: Optional[Dict[str, Any]] = None
     notification_config: Optional[Dict[str, Any]] = None
     public_settings: Optional[Dict[str, Any]] = None
+    public_settings_customized: Optional[bool] = None
     expiration_date: Optional[str] = None
 
 class QRProfile(QRProfileBase):
@@ -365,6 +378,26 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
+def generate_password_reset_code() -> str:
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+def hash_password_reset_code(email: str, code: str) -> str:
+    pepper = os.getenv('PASSWORD_RESET_PEPPER', JWT_SECRET)
+    payload = f"{str(email).strip().lower()}::{str(code).strip()}::{pepper}"
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
+
+def allow_dev_password_reset_code() -> bool:
+    env_name = str(
+        os.getenv('APP_ENV')
+        or os.getenv('ENVIRONMENT')
+        or os.getenv('ENV')
+        or 'development'
+    ).strip().lower()
+    if env_name in {'production', 'prod'}:
+        return False
+    raw_flag = str(os.getenv('ALLOW_DEV_PASSWORD_RESET_CODE', 'true')).strip().lower()
+    return raw_flag not in {'0', 'false', 'no', 'off'}
+
 def create_token(user_id: str, email: str) -> str:
     payload = {
         'user_id': user_id,
@@ -424,6 +457,12 @@ def normalize_user_document(user_doc: Dict[str, Any]) -> Dict[str, Any]:
     normalized.setdefault('qr_quota_lifetime', 0)
     normalized.setdefault('qr_subscription_buckets', [])
     return normalized
+
+def is_deleted_user_document(user_doc: Dict[str, Any]) -> bool:
+    account_status = str(user_doc.get('account_status') or '').strip().lower()
+    if account_status == 'deleted':
+        return True
+    return bool(user_doc.get('deleted_at'))
 
 def is_master_account(user_doc: Dict[str, Any]) -> bool:
     return infer_account_role(user_doc) == 'master' and not user_doc.get('is_admin', False)
@@ -1626,6 +1665,19 @@ def build_generic_profile_template_patch(
         'enabled': True,
         'category': category,
         'theme': {'primary_color': primary_color, 'bg_color': bg_color},
+        'default_public_settings': {
+            'request_location_automatically': False,
+            'top_profile_photo_enabled': category == 'business',
+            'top_profile_photo_shape': 'circle',
+            'floating_buttons': ['whatsapp', 'call_business', 'website'] if category == 'business' else ['call_contact', 'send_location', 'call_emergency'],
+        },
+        'display_options': {
+            'show_profile_type_badge': True,
+            'show_business_banner': category == 'business',
+            'show_floating_actions': True,
+            'show_lead_form': category == 'business',
+            'show_manual_location_button': category == 'personal',
+        },
         'sections': [
             {
                 'id': 's_main',
@@ -1662,6 +1714,122 @@ for item in EXTRA_PERSONAL_PROFILE_TEMPLATES:
             bg_color=item['bg'],
         ),
     )
+
+def append_fields_to_template_patch(
+    *,
+    category: Literal['personal', 'business'],
+    template_key: str,
+    section_id: str,
+    fields: List[Dict[str, Any]],
+    fallback_section_title: str = 'Información adicional',
+    fallback_section_description: str = '',
+    fallback_section_icon: str = 'file-text',
+) -> None:
+    category_templates = PROFILE_TEMPLATE_MIGRATION_PATCHES.get(category)
+    if not isinstance(category_templates, dict):
+        return
+
+    template = category_templates.get(template_key)
+    if not isinstance(template, dict):
+        return
+
+    sections = template.setdefault('sections', [])
+    if not isinstance(sections, list):
+        sections = []
+        template['sections'] = sections
+
+    section = next((item for item in sections if item.get('id') == section_id), None)
+    if not isinstance(section, dict):
+        section = {
+            'id': section_id,
+            'title': fallback_section_title,
+            'description': fallback_section_description,
+            'icon': fallback_section_icon,
+            'fields': [],
+        }
+        sections.append(section)
+
+    existing_fields = section.setdefault('fields', [])
+    if not isinstance(existing_fields, list):
+        existing_fields = []
+        section['fields'] = existing_fields
+
+    existing_keys = {
+        str(item.get('id') or item.get('name') or '').strip().lower()
+        for item in existing_fields
+        if isinstance(item, dict)
+    }
+
+    for field_patch in fields:
+        key = str(field_patch.get('id') or field_patch.get('name') or '').strip().lower()
+        if not key or key in existing_keys:
+            continue
+        existing_fields.append(copy.deepcopy(field_patch))
+        existing_keys.add(key)
+
+append_fields_to_template_patch(
+    category='business',
+    template_key='restaurante',
+    section_id='s_contact',
+    fields=[
+        {'id': 'whatsapp', 'name': 'whatsapp', 'label': 'WhatsApp Reservas', 'type': 'tel', 'required': False, 'visible': True, 'icon': 'phone', 'placeholder': '569...'},
+        {'id': 'reservation_url', 'name': 'reservation_url', 'label': 'Link de Reservas', 'type': 'url', 'required': False, 'visible': True, 'icon': 'calendar', 'placeholder': 'https://'},
+        {'id': 'google_review_link', 'name': 'google_review_link', 'label': 'Link Reseñas Google', 'type': 'url', 'required': False, 'visible': True, 'icon': 'star', 'placeholder': 'https://'},
+        {'id': 'delivery_time', 'name': 'delivery_time', 'label': 'Tiempo de Entrega', 'type': 'text', 'required': False, 'visible': True, 'icon': 'clock', 'placeholder': 'Ej: 30-45 min'},
+        {'id': 'price_range', 'name': 'price_range', 'label': 'Rango de Precio', 'type': 'text', 'required': False, 'visible': True, 'icon': 'credit-card', 'placeholder': '$$'},
+    ],
+)
+
+append_fields_to_template_patch(
+    category='business',
+    template_key='hotel',
+    section_id='s_info',
+    fields=[
+        {'id': 'booking_url', 'name': 'booking_url', 'label': 'Link de Reserva', 'type': 'url', 'required': False, 'visible': True, 'icon': 'calendar', 'placeholder': 'https://'},
+        {'id': 'reception_phone', 'name': 'reception_phone', 'label': 'Teléfono Recepción', 'type': 'tel', 'required': False, 'visible': True, 'icon': 'phone', 'placeholder': '+56...'},
+        {'id': 'emergency_info', 'name': 'emergency_info', 'label': 'Info Emergencia', 'type': 'textarea', 'required': False, 'visible': True, 'icon': 'alert', 'placeholder': 'Instrucciones en caso de emergencia'},
+    ],
+)
+
+append_fields_to_template_patch(
+    category='personal',
+    template_key='medico',
+    section_id='s_emergency',
+    fields=[
+        {'id': 'health_insurance', 'name': 'health_insurance', 'label': 'Seguro de Salud', 'type': 'text', 'required': False, 'visible': True, 'icon': 'credit-card', 'placeholder': 'Isapre/Fonasa'},
+        {'id': 'emergency_instructions', 'name': 'emergency_instructions', 'label': 'Instrucciones de Emergencia', 'type': 'textarea', 'required': False, 'visible': True, 'icon': 'alert', 'placeholder': 'Qué hacer en caso de crisis'},
+    ],
+)
+
+append_fields_to_template_patch(
+    category='personal',
+    template_key='mascota',
+    section_id='s_pet',
+    fields=[
+        {'id': 'microchip_id', 'name': 'microchip_id', 'label': 'ID de Microchip', 'type': 'text', 'required': False, 'visible': True, 'icon': 'credit-card', 'placeholder': ''},
+        {'id': 'special_care', 'name': 'special_care', 'label': 'Cuidados Especiales', 'type': 'textarea', 'required': False, 'visible': True, 'icon': 'heart', 'placeholder': 'Medicamentos, comportamiento, etc.'},
+    ],
+)
+
+append_fields_to_template_patch(
+    category='personal',
+    template_key='vehiculo',
+    section_id='s_vehicle',
+    fields=[
+        {'id': 'insurance_company', 'name': 'insurance_company', 'label': 'Aseguradora', 'type': 'text', 'required': False, 'visible': True, 'icon': 'shield', 'placeholder': ''},
+        {'id': 'roadside_assistance_phone', 'name': 'roadside_assistance_phone', 'label': 'Asistencia en Ruta', 'type': 'tel', 'required': False, 'visible': True, 'icon': 'phone', 'placeholder': '+56...'},
+    ],
+)
+
+append_fields_to_template_patch(
+    category='personal',
+    template_key='nino',
+    section_id='s_person',
+    fields=[
+        {'id': 'communication_preferences', 'name': 'communication_preferences', 'label': 'Preferencias de Comunicación', 'type': 'textarea', 'required': False, 'visible': True, 'icon': 'message', 'placeholder': 'Cómo calmar o asistir mejor'},
+        {'id': 'safe_point', 'name': 'safe_point', 'label': 'Punto Seguro', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': 'Lugar de encuentro definido'},
+    ],
+)
 
 def _is_missing_value(value: Any) -> bool:
     return value is None or (isinstance(value, str) and value.strip() == '')
@@ -1715,6 +1883,11 @@ def merge_profile_types_config_with_patches(config_data: Dict[str, Any]) -> Tupl
             if 'enabled' not in template and 'enabled' in template_patch:
                 template['enabled'] = template_patch['enabled']
                 changed = True
+
+            for config_key in ('default_public_settings', 'display_options'):
+                if config_key not in template and isinstance(template_patch.get(config_key), dict):
+                    template[config_key] = copy.deepcopy(template_patch[config_key])
+                    changed = True
 
             patch_theme = template_patch.get('theme')
             if isinstance(patch_theme, dict):
@@ -1771,13 +1944,16 @@ def merge_profile_types_config_with_patches(config_data: Dict[str, Any]) -> Tupl
                         existing_field['visible'] = field_patch['visible']
                         changed = True
 
-    return merged, changed
+    normalized_config, normalized_changed = normalize_profile_types_config_data(merged)
+    return normalized_config, (changed or normalized_changed)
 
 def build_default_profile_types_config() -> Dict[str, Any]:
-    return {
+    base_config = {
         category: [copy.deepcopy(template) for template in templates.values()]
         for category, templates in PROFILE_TEMPLATE_MIGRATION_PATCHES.items()
     }
+    normalized_config, _ = normalize_profile_types_config_data(base_config)
+    return normalized_config
 
 async def get_qr_scope_context(user_doc: Dict[str, Any]) -> Dict[str, Any]:
     user = normalize_user_document(user_doc)
@@ -2181,6 +2357,26 @@ def normalize_profile_public_settings(
         default=False,
     )
 
+    top_photo_enabled_value = base_settings.get('top_profile_photo_enabled')
+    if top_photo_enabled_value is None:
+        top_photo_enabled_value = base_settings.get('topProfilePhotoEnabled')
+    if top_photo_enabled_value is None:
+        top_photo_enabled_value = base_settings.get('profile_photo_enabled')
+    base_settings['top_profile_photo_enabled'] = coerce_bool(
+        top_photo_enabled_value,
+        default=False,
+    )
+
+    top_photo_shape_value = base_settings.get('top_profile_photo_shape')
+    if top_photo_shape_value is None:
+        top_photo_shape_value = base_settings.get('topProfilePhotoShape')
+    if top_photo_shape_value is None:
+        top_photo_shape_value = base_settings.get('profile_photo_shape')
+    top_photo_shape = str(top_photo_shape_value or '').strip().lower()
+    if top_photo_shape not in {'circle', 'rounded', 'square'}:
+        top_photo_shape = 'circle'
+    base_settings['top_profile_photo_shape'] = top_photo_shape
+
     raw_buttons = base_settings.get('floating_buttons')
     if raw_buttons is None and 'floatingButtons' in base_settings:
         raw_buttons = base_settings.get('floatingButtons')
@@ -2236,6 +2432,136 @@ def normalize_profile_public_settings(
         base_settings.pop(legacy_key, None)
     return base_settings
 
+def normalize_template_display_options(raw_options: Any, category: Any) -> Dict[str, bool]:
+    normalized_category = 'business' if str(category or '').strip().lower() == 'business' else 'personal'
+    source = raw_options if isinstance(raw_options, dict) else {}
+
+    return {
+        'show_profile_type_badge': coerce_bool(
+            source.get('show_profile_type_badge', source.get('showProfileTypeBadge')),
+            default=True,
+        ),
+        'show_business_banner': coerce_bool(
+            source.get('show_business_banner', source.get('showBusinessBanner')),
+            default=True,
+        ) if normalized_category == 'business' else False,
+        'show_floating_actions': coerce_bool(
+            source.get('show_floating_actions', source.get('showFloatingActions')),
+            default=True,
+        ),
+        'show_lead_form': coerce_bool(
+            source.get('show_lead_form', source.get('showLeadForm')),
+            default=(normalized_category == 'business'),
+        ),
+        'show_manual_location_button': coerce_bool(
+            source.get('show_manual_location_button', source.get('showManualLocationButton')),
+            default=True,
+        ) if normalized_category == 'personal' else False,
+    }
+
+def normalize_profile_types_config_data(raw_config: Any) -> Tuple[Dict[str, Any], bool]:
+    if not isinstance(raw_config, dict):
+        return {'personal': [], 'business': []}, True
+
+    normalized: Dict[str, Any] = copy.deepcopy(raw_config)
+    changed = False
+
+    for category in ('personal', 'business'):
+        templates = normalized.get(category)
+        if not isinstance(templates, list):
+            normalized[category] = []
+            changed = True
+            continue
+
+        normalized_templates: List[Dict[str, Any]] = []
+        for template in templates:
+            if not isinstance(template, dict):
+                changed = True
+                continue
+
+            template_copy = copy.deepcopy(template)
+            template_profile_type = normalize_qr_profile_type(template_copy.get('category') or category)
+            if template_copy.get('category') != template_profile_type:
+                template_copy['category'] = template_profile_type
+                changed = True
+
+            normalized_public_settings = normalize_profile_public_settings(
+                template_copy.get('default_public_settings'),
+                profile_type=template_profile_type,
+                strict=False,
+            )
+            if template_copy.get('default_public_settings') != normalized_public_settings:
+                template_copy['default_public_settings'] = normalized_public_settings
+                changed = True
+
+            normalized_display_options = normalize_template_display_options(
+                template_copy.get('display_options'),
+                template_profile_type,
+            )
+            if template_copy.get('display_options') != normalized_display_options:
+                template_copy['display_options'] = normalized_display_options
+                changed = True
+
+            normalized_templates.append(template_copy)
+
+        if normalized_templates != templates:
+            normalized[category] = normalized_templates
+            changed = True
+
+    return normalized, changed
+
+def canonicalize_public_settings_for_comparison(public_settings: Any, profile_type: Any) -> Dict[str, Any]:
+    normalized = normalize_profile_public_settings(
+        public_settings,
+        profile_type=profile_type,
+        strict=False,
+    )
+    return {
+        'request_location_automatically': coerce_bool(
+            normalized.get('request_location_automatically'),
+            default=False,
+        ),
+        'top_profile_photo_enabled': coerce_bool(
+            normalized.get('top_profile_photo_enabled'),
+            default=False,
+        ),
+        'top_profile_photo_shape': str(normalized.get('top_profile_photo_shape') or 'circle').strip().lower() or 'circle',
+        'floating_buttons': list(normalized.get('floating_buttons') or [])[:QR_PUBLIC_SETTINGS_MAX_FLOATING_BUTTONS],
+    }
+
+def are_public_settings_equivalent(
+    left_settings: Any,
+    right_settings: Any,
+    *,
+    profile_type: Any,
+) -> bool:
+    return canonicalize_public_settings_for_comparison(left_settings, profile_type) == canonicalize_public_settings_for_comparison(right_settings, profile_type)
+
+async def get_template_default_public_settings(profile_type: Any, sub_type: Any) -> Dict[str, Any]:
+    template = await get_profile_template(profile_type, sub_type)
+    raw_defaults = template.get('default_public_settings') if isinstance(template, dict) else {}
+    return normalize_profile_public_settings(
+        raw_defaults,
+        profile_type=profile_type,
+        strict=False,
+    )
+
+async def resolve_public_settings_customized_flag(
+    *,
+    profile_type: Any,
+    sub_type: Any,
+    public_settings: Any,
+    explicit_value: Any = None,
+) -> bool:
+    if explicit_value is not None:
+        return coerce_bool(explicit_value, default=False)
+    template_defaults = await get_template_default_public_settings(profile_type, sub_type)
+    return not are_public_settings_equivalent(
+        public_settings,
+        template_defaults,
+        profile_type=profile_type,
+    )
+
 def build_legacy_notification_config(
     notification_config: Any,
     public_settings: Dict[str, Any],
@@ -2246,6 +2572,11 @@ def build_legacy_notification_config(
         default=False,
     )
     normalized['request_location'] = normalized['request_location_automatically']
+    normalized['top_profile_photo_enabled'] = coerce_bool(
+        public_settings.get('top_profile_photo_enabled'),
+        default=False,
+    )
+    normalized['top_profile_photo_shape'] = str(public_settings.get('top_profile_photo_shape') or 'circle').strip().lower() or 'circle'
     normalized['floating_buttons'] = list(public_settings.get('floating_buttons') or [])[:QR_PUBLIC_SETTINGS_MAX_FLOATING_BUTTONS]
 
     for legacy_key in ('resolved_floating_buttons', 'floating_buttons_resolved', 'resolved_buttons'):
@@ -2369,7 +2700,10 @@ def build_profile_floating_button(
     if button_type == 'call_contact':
         url = build_tel_link(get_first_present_value(profile_data, ['contact_phone', 'owner_phone', 'phone']))
     elif button_type == 'send_location':
-        url = build_profile_location_link(profile_data)
+        # Este botón dispara el envío de ubicación del dispositivo del visitante
+        # (no depende de que el perfil tenga una dirección cargada).
+        # Si existe ubicación en el perfil, mantenemos ese enlace como fallback.
+        url = build_profile_location_link(profile_data) or 'action://send-location'
     elif button_type == 'call_emergency':
         url = build_tel_link(get_first_present_value(profile_data, ['emergency_phone', 'contact_phone']))
     elif button_type == 'whatsapp':
@@ -3295,14 +3629,14 @@ def resolve_viewer_product_audience(viewer_user: Optional[Dict[str, Any]]) -> Op
 
 def is_product_visible_for_viewer(product: Dict[str, Any], viewer_user: Optional[Dict[str, Any]]) -> bool:
     viewer_audience = resolve_viewer_product_audience(viewer_user)
-    if viewer_audience is None:
-        return True
     product_visible_to = normalize_product_visible_to(
         product.get('visible_to'),
         category=product.get('category'),
         product_like=product,
         strict=False,
     )
+    if viewer_audience is None:
+        return product_visible_to == 'visitor'
     return product_visible_to in {'visitor', viewer_audience}
 
 def sanitize_product_input_document(
@@ -3476,6 +3810,7 @@ async def generate_auto_qr_profile_for_purchase(user: Dict[str, Any], item: Dict
         },
         'notification_config': {},
         'public_settings': normalize_profile_public_settings({}, profile_type=profile_type, strict=False),
+        'public_settings_customized': False,
         'expiration_date': None,
         'scan_count': 0,
         'created_at': now.isoformat(),
@@ -3714,6 +4049,111 @@ async def login(credentials: UserLogin):
         'user': user,
         'token': token
     }
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(payload: ForgotPasswordRequest):
+    normalized_email = str(payload.email).strip().lower()
+    generic_response = {
+        'status': 'ok',
+        'message': 'Si el correo existe, te enviamos un código para restablecer tu contraseña.',
+    }
+
+    user = await db.users.find_one({'email': normalized_email}, {'_id': 0, 'id': 1, 'email': 1, 'account_status': 1})
+    if not user or user.get('account_status') == 'deleted':
+        return generic_response
+
+    now = datetime.now(timezone.utc)
+    reset_code = generate_password_reset_code()
+    reset_payload = {
+        'code_hash': hash_password_reset_code(normalized_email, reset_code),
+        'expires_at': (now + timedelta(minutes=PASSWORD_RESET_CODE_TTL_MINUTES)).isoformat(),
+        'requested_at': now.isoformat(),
+        'attempts': 0,
+        'consumed_at': None,
+    }
+
+    await db.users.update_one(
+        {'id': user['id']},
+        {'$set': {
+            'password_reset': reset_payload,
+            'updated_at': now.isoformat(),
+        }}
+    )
+
+    email_sent = False
+    try:
+        send_email_notification(
+            [normalized_email],
+            'Código de recuperación - QR Profiles',
+            (
+                "Recibimos una solicitud para restablecer tu contraseña.\n\n"
+                f"Código de recuperación: {reset_code}\n"
+                f"Vence en {PASSWORD_RESET_CODE_TTL_MINUTES} minutos.\n\n"
+                "Si no solicitaste este cambio, puedes ignorar este mensaje."
+            )
+        )
+        email_sent = bool(os.getenv('SMTP_HOST', '').strip())
+    except Exception as exc:
+        logger.error(f"Error enviando correo de recuperación de contraseña: {str(exc)}")
+
+    response_payload = dict(generic_response)
+    if not email_sent and allow_dev_password_reset_code():
+        response_payload['dev_reset_code'] = reset_code
+        response_payload['dev_notice'] = 'SMTP no configurado: se devuelve código de recuperación en modo desarrollo.'
+    return response_payload
+
+@api_router.post("/auth/reset-password")
+async def reset_password(payload: ResetPasswordRequest):
+    normalized_email = str(payload.email).strip().lower()
+    normalized_code = str(payload.code or '').strip()
+    invalid_code_message = 'Código de recuperación inválido o vencido'
+
+    if not normalized_code:
+        raise HTTPException(status_code=400, detail=invalid_code_message)
+
+    user = await db.users.find_one({'email': normalized_email}, {'_id': 0})
+    if not user:
+        raise HTTPException(status_code=400, detail=invalid_code_message)
+
+    reset_state = user.get('password_reset')
+    if not isinstance(reset_state, dict):
+        raise HTTPException(status_code=400, detail=invalid_code_message)
+
+    attempts = parse_non_negative_int(reset_state.get('attempts', 0), 0)
+    if attempts >= PASSWORD_RESET_MAX_ATTEMPTS:
+        raise HTTPException(status_code=400, detail='Se superó el número máximo de intentos. Solicita un nuevo código.')
+
+    expires_at = parse_iso_datetime_utc(reset_state.get('expires_at'))
+    if not expires_at or expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail=invalid_code_message)
+
+    stored_hash = str(reset_state.get('code_hash') or '')
+    submitted_hash = hash_password_reset_code(normalized_email, normalized_code)
+    if not stored_hash or not secrets.compare_digest(stored_hash, submitted_hash):
+        next_attempts = attempts + 1
+        update_payload: Dict[str, Any] = {
+            'password_reset.attempts': next_attempts,
+            'password_reset.last_attempt_at': datetime.now(timezone.utc).isoformat(),
+        }
+        if next_attempts >= PASSWORD_RESET_MAX_ATTEMPTS:
+            update_payload['password_reset.locked_at'] = datetime.now(timezone.utc).isoformat()
+        await db.users.update_one({'id': user['id']}, {'$set': update_payload})
+        raise HTTPException(status_code=400, detail=invalid_code_message)
+
+    await db.users.update_one(
+        {'id': user['id']},
+        {
+            '$set': {
+                'password': hash_password(payload.new_password),
+                'updated_at': datetime.now(timezone.utc).isoformat(),
+            },
+            '$unset': {
+                'password_reset': '',
+            }
+        }
+    )
+
+    return {'status': 'success', 'message': 'Contraseña actualizada correctamente'}
 
 @api_router.get("/auth/me")
 async def get_me(request: Request):
@@ -4225,6 +4665,25 @@ async def get_my_subscriptions(request: Request):
         'viewer_user_id': user['id'],
     }
 
+@api_router.delete("/subscriptions/{bucket_id}")
+async def delete_my_subscription(bucket_id: str, request: Request):
+    user = await get_current_user(request)
+    owner_user_id = await resolve_subscription_owner_id_from_user_doc(user)
+
+    if not (is_master_account(user) or owner_user_id == user.get('id')):
+        raise HTTPException(status_code=403, detail='Solo la cuenta master puede eliminar suscripciones')
+
+    revoked = await revoke_subscription_bucket_from_owner(owner_user_id, bucket_id)
+    if not revoked:
+        raise HTTPException(status_code=404, detail='Suscripción no encontrada')
+
+    overview = await get_subscription_overview_for_owner(owner_user_id)
+    return {
+        **overview,
+        'is_master_account': is_master_account(user),
+        'viewer_user_id': user['id'],
+    }
+
 # ==================== QR PROFILES ====================
 
 @api_router.get("/qr-profiles/creation-policy")
@@ -4295,6 +4754,12 @@ async def create_qr_profile(profile_data: QRProfileCreate, request: Request):
         legacy_settings=profile_data.notification_config,
         strict=True,
     )
+    public_settings_customized = await resolve_public_settings_customized_flag(
+        profile_type=profile_data.profile_type,
+        sub_type=profile_data.sub_type,
+        public_settings=normalized_public_settings,
+        explicit_value=profile_data.public_settings_customized,
+    )
 
     profile_doc = {
         'id': profile_id,
@@ -4311,6 +4776,7 @@ async def create_qr_profile(profile_data: QRProfileCreate, request: Request):
             normalized_public_settings,
         ),
         'public_settings': normalized_public_settings,
+        'public_settings_customized': public_settings_customized,
         'expiration_date': profile_data.expiration_date,
         'subscription_bucket_id': consumed_bucket_id if quota_consumed else None,
         'subscription_owner_user_id': str(quota_owner_user_id) if quota_consumed and quota_owner_user_id else None,
@@ -4369,17 +4835,18 @@ async def update_qr_profile(profile_id: str, profile_data: QRProfileUpdate, requ
     
     update_data = profile_data.model_dump(exclude_unset=True)
     effective_profile_type = update_data.get('profile_type', existing.get('profile_type'))
+    effective_sub_type = update_data.get('sub_type', existing.get('sub_type'))
     if 'data' in update_data:
         update_data['data'] = await enforce_profile_uploaded_images_in_data(
             update_data.get('data') or {},
             profile_type=effective_profile_type,
-            sub_type=update_data.get('sub_type', existing.get('sub_type')),
+            sub_type=effective_sub_type,
             request=request,
             path='data',
             allowed_scopes=PROFILE_IMAGE_INPUT_SCOPES,
             owner_user_id=str(existing.get('user_id') or user['id']),
         )
-    if 'public_settings' in update_data or 'notification_config' in update_data or 'profile_type' in update_data:
+    if 'public_settings' in update_data or 'notification_config' in update_data or 'profile_type' in update_data or 'sub_type' in update_data:
         effective_notification_config = update_data.get('notification_config', existing.get('notification_config'))
         update_data['public_settings'] = normalize_profile_public_settings(
             update_data.get('public_settings', existing.get('public_settings')),
@@ -4390,6 +4857,19 @@ async def update_qr_profile(profile_id: str, profile_data: QRProfileUpdate, requ
         update_data['notification_config'] = build_legacy_notification_config(
             effective_notification_config,
             update_data['public_settings'],
+        )
+    if (
+        'public_settings_customized' in update_data
+        or 'public_settings' in update_data
+        or 'profile_type' in update_data
+        or 'sub_type' in update_data
+    ):
+        effective_public_settings = update_data.get('public_settings', existing.get('public_settings'))
+        update_data['public_settings_customized'] = await resolve_public_settings_customized_flag(
+            profile_type=effective_profile_type,
+            sub_type=effective_sub_type,
+            public_settings=effective_public_settings,
+            explicit_value=update_data.get('public_settings_customized') if 'public_settings_customized' in update_data else None,
         )
     update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
     
@@ -4529,10 +5009,19 @@ async def get_profile_template(profile_type: Optional[str], sub_type: Optional[s
 
     config = await db.admin_configs.find_one({'config_type': 'profile_types'}, {'_id': 0, 'data': 1})
     config_data = config.get('data') if config else None
-    if not isinstance(config_data, dict):
-        return None
+    if isinstance(config_data, dict):
+        merged_config, changed = merge_profile_types_config_with_patches(config_data)
+    else:
+        merged_config = build_default_profile_types_config()
+        changed = False
 
-    category_templates = config_data.get(profile_type, [])
+    if changed and config:
+        await db.admin_configs.update_one(
+            {'config_type': 'profile_types'},
+            {'$set': {'data': merged_config, 'updated_at': datetime.now(timezone.utc).isoformat()}}
+        )
+
+    category_templates = merged_config.get(profile_type, [])
     if not isinstance(category_templates, list):
         return None
 
@@ -5377,6 +5866,134 @@ async def admin_delete_user(user_id: str, request: Request):
     )
     return {'status': 'deleted'}
 
+@api_router.get("/admin/trash")
+async def admin_get_trash(request: Request, include_products: bool = True):
+    admin = await get_current_admin(request)
+
+    users = await db.users.find(
+        {
+            '$or': [
+                {'account_status': 'deleted'},
+                {'deleted_at': {'$ne': None}},
+            ]
+        },
+        {'_id': 0, 'password': 0}
+    ).to_list(1000)
+    normalized_users = [normalize_user_document(user) for user in users]
+    user_index = {user.get('id'): user for user in normalized_users if user.get('id')}
+
+    qr_profiles = await db.qr_profiles.find(
+        {'deleted_at': {'$ne': None}},
+        {'_id': 0}
+    ).to_list(2000)
+    sanitized_profiles = await sanitize_profile_collection(qr_profiles, request=request)
+
+    profile_items: List[Dict[str, Any]] = []
+    for profile in sanitized_profiles:
+        owner = user_index.get(profile.get('user_id'))
+        profile_items.append({
+            'id': profile.get('id'),
+            'hash': profile.get('hash'),
+            'name': profile.get('name'),
+            'alias': profile.get('alias'),
+            'profile_type': profile.get('profile_type'),
+            'sub_type': profile.get('sub_type'),
+            'status': profile.get('status'),
+            'deleted_at': profile.get('deleted_at'),
+            'updated_at': profile.get('updated_at'),
+            'user_id': profile.get('user_id'),
+            'user_name': owner.get('name') if owner else None,
+            'user_email': owner.get('email') if owner else None,
+        })
+
+    user_items = [{
+        'id': user.get('id'),
+        'name': user.get('name'),
+        'email': user.get('email'),
+        'user_type': user.get('user_type'),
+        'account_role': user.get('account_role'),
+        'account_status': user.get('account_status'),
+        'parent_account_id': user.get('parent_account_id'),
+        'deleted_at': user.get('deleted_at'),
+        'updated_at': user.get('updated_at'),
+    } for user in normalized_users]
+
+    product_items: List[Dict[str, Any]] = []
+    if include_products:
+        products = await db.products.find({'active': False}, {'_id': 0}).to_list(1000)
+        product_items = [normalize_product_document(product, request=request) for product in products]
+
+    return {
+        'counts': {
+            'users': len(user_items),
+            'qr_profiles': len(profile_items),
+            'products': len(product_items),
+        },
+        'users': user_items,
+        'qr_profiles': profile_items,
+        'products': product_items,
+    }
+
+@api_router.delete("/admin/trash/users/{user_id}")
+async def admin_permanently_delete_user(user_id: str, request: Request):
+    admin = await get_current_admin(request)
+    if user_id == admin.get('id'):
+        raise HTTPException(status_code=400, detail="No puedes eliminar tu propia cuenta admin")
+
+    target = await db.users.find_one({'id': user_id}, {'_id': 0, 'id': 1, 'user_type': 1, 'account_role': 1, 'account_status': 1, 'deleted_at': 1})
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if not is_deleted_user_document(target):
+        raise HTTPException(status_code=400, detail="Solo puedes eliminar definitivamente cuentas que estén en papelera")
+
+    user_ids_to_delete: List[str] = [user_id]
+    if target.get('user_type') == 'business' and infer_account_role(target) == 'master':
+        subaccounts = await db.users.find(
+            {'parent_account_id': user_id},
+            {'_id': 0, 'id': 1}
+        ).to_list(2000)
+        for subaccount in subaccounts:
+            subaccount_id = str(subaccount.get('id') or '').strip()
+            if subaccount_id and subaccount_id not in user_ids_to_delete:
+                user_ids_to_delete.append(subaccount_id)
+
+    qr_delete_result = await db.qr_profiles.delete_many({'user_id': {'$in': user_ids_to_delete}})
+    users_delete_result = await db.users.delete_many({'id': {'$in': user_ids_to_delete}})
+
+    return {
+        'status': 'deleted_permanently',
+        'deleted_user_count': users_delete_result.deleted_count,
+        'deleted_qr_profiles_count': qr_delete_result.deleted_count,
+    }
+
+@api_router.delete("/admin/trash/qr-profiles/{profile_id}")
+async def admin_permanently_delete_qr_profile(profile_id: str, request: Request):
+    admin = await get_current_admin(request)
+    profile = await db.qr_profiles.find_one({'id': profile_id}, {'_id': 0, 'id': 1, 'deleted_at': 1})
+    if not profile:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    if not profile.get('deleted_at'):
+        raise HTTPException(status_code=400, detail="Solo puedes borrar definitivamente perfiles que estén en papelera")
+
+    result = await db.qr_profiles.delete_one({'id': profile_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Perfil no encontrado")
+    return {'status': 'deleted_permanently'}
+
+@api_router.delete("/admin/trash/products/{product_id}")
+async def admin_permanently_delete_product_from_trash(product_id: str, request: Request):
+    admin = await get_current_admin(request)
+    product = await db.products.find_one({'id': product_id}, {'_id': 0, 'id': 1, 'active': 1})
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    if product.get('active', True) is not False:
+        raise HTTPException(status_code=400, detail="Solo puedes borrar definitivamente productos desactivados")
+
+    result = await db.products.delete_one({'id': product_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    return {'status': 'deleted_permanently'}
+
 @api_router.get("/admin/users/{user_id}/subscriptions")
 async def admin_get_user_subscriptions(user_id: str, request: Request):
     admin = await get_current_admin(request)
@@ -5458,6 +6075,12 @@ async def admin_create_qr_profile(profile_data: AdminQRProfileCreate, request: R
         legacy_settings=profile_data.notification_config,
         strict=True,
     )
+    public_settings_customized = await resolve_public_settings_customized_flag(
+        profile_type=profile_data.profile_type,
+        sub_type=profile_data.sub_type,
+        public_settings=normalized_public_settings,
+        explicit_value=profile_data.public_settings_customized,
+    )
     profile_doc = {
         'id': profile_id,
         'user_id': profile_data.user_id,
@@ -5481,6 +6104,7 @@ async def admin_create_qr_profile(profile_data: AdminQRProfileCreate, request: R
             normalized_public_settings,
         ),
         'public_settings': normalized_public_settings,
+        'public_settings_customized': public_settings_customized,
         'expiration_date': profile_data.expiration_date,
         'scan_count': 0,
         'created_at': now.isoformat(),
@@ -5558,17 +6182,18 @@ async def admin_update_profile(profile_id: str, profile_data: Dict[str, Any], re
         )
 
     effective_profile_type = profile_data.get('profile_type', existing.get('profile_type'))
+    effective_sub_type = profile_data.get('sub_type', existing.get('sub_type'))
     if 'data' in profile_data:
         profile_data['data'] = await enforce_profile_uploaded_images_in_data(
             profile_data.get('data') or {},
             profile_type=effective_profile_type,
-            sub_type=profile_data.get('sub_type', existing.get('sub_type')),
+            sub_type=effective_sub_type,
             request=request,
             path='data',
             allowed_scopes=ADMIN_PROFILE_IMAGE_INPUT_SCOPES,
             owner_user_id=current_owner_user_id,
         )
-    if 'public_settings' in profile_data or 'notification_config' in profile_data or 'profile_type' in profile_data:
+    if 'public_settings' in profile_data or 'notification_config' in profile_data or 'profile_type' in profile_data or 'sub_type' in profile_data:
         effective_notification_config = profile_data.get('notification_config', existing.get('notification_config'))
         profile_data['public_settings'] = normalize_profile_public_settings(
             profile_data.get('public_settings', existing.get('public_settings')),
@@ -5579,6 +6204,19 @@ async def admin_update_profile(profile_id: str, profile_data: Dict[str, Any], re
         profile_data['notification_config'] = build_legacy_notification_config(
             effective_notification_config,
             profile_data['public_settings'],
+        )
+    if (
+        'public_settings_customized' in profile_data
+        or 'public_settings' in profile_data
+        or 'profile_type' in profile_data
+        or 'sub_type' in profile_data
+    ):
+        effective_public_settings = profile_data.get('public_settings', existing.get('public_settings'))
+        profile_data['public_settings_customized'] = await resolve_public_settings_customized_flag(
+            profile_type=effective_profile_type,
+            sub_type=effective_sub_type,
+            public_settings=effective_public_settings,
+            explicit_value=profile_data.get('public_settings_customized') if 'public_settings_customized' in profile_data else None,
         )
     profile_data['updated_at'] = datetime.now(timezone.utc).isoformat()
     
@@ -6029,10 +6667,11 @@ async def get_profile_types_config(request: Request):
 @api_router.put("/admin/profile-types-config")
 async def update_profile_types_config(config_data: Dict[str, Any], request: Request):
     admin = await get_current_admin(request)
-    
+
+    merged_config, _ = merge_profile_types_config_with_patches(config_data)
     await db.admin_configs.update_one(
         {'config_type': 'profile_types'},
-        {'$set': {'config_type': 'profile_types', 'data': config_data, 'updated_at': datetime.now(timezone.utc).isoformat()}},
+        {'$set': {'config_type': 'profile_types', 'data': merged_config, 'updated_at': datetime.now(timezone.utc).isoformat()}},
         upsert=True
     )
     return {'status': 'success'}
@@ -6497,7 +7136,16 @@ async def startup_db():
     )
     await db.qr_profiles.update_many(
         {'public_settings': {'$exists': False}},
-        {'$set': {'public_settings': {'request_location_automatically': False, 'floating_buttons': []}}}
+        {'$set': {'public_settings': {
+            'request_location_automatically': False,
+            'top_profile_photo_enabled': False,
+            'top_profile_photo_shape': 'circle',
+            'floating_buttons': [],
+        }}}
+    )
+    await db.qr_profiles.update_many(
+        {'public_settings_customized': {'$exists': False}},
+        {'$set': {'public_settings_customized': False}}
     )
     
     # Crear usuario admin si no existe

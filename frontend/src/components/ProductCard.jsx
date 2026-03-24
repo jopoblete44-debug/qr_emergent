@@ -65,7 +65,7 @@ export const ProductMedia = ({ product, variant = 'card' }) => {
   );
 };
 
-export const ProductCard = ({ product, onAddToCart }) => {
+export const ProductCard = ({ product, onAddToCart, inCart = false, onGoToCart = undefined }) => {
   const formatPrice = (price) => {
     return new Intl.NumberFormat('es-CL', {
       style: 'currency',
@@ -145,11 +145,17 @@ export const ProductCard = ({ product, onAddToCart }) => {
       <CardFooter className="p-6 pt-0">
         <Button
           className="w-full h-11"
-          onClick={() => onAddToCart(product)}
+          onClick={() => {
+            if (inCart) {
+              onGoToCart?.();
+              return;
+            }
+            onAddToCart(product);
+          }}
           data-testid={`add-to-cart-btn-${product.id}`}
         >
           <ShoppingCart className="mr-2 h-4 w-4" />
-          Agregar al carrito
+          {inCart ? 'Ir al carrito' : 'Agregar al carrito'}
         </Button>
       </CardFooter>
     </Card>

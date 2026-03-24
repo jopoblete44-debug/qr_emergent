@@ -8,7 +8,7 @@ import {
 
 const ICON_MAP = {
   heart: Heart, user: User, 'map-pin': MapPin, globe: Globe, shield: Shield,
-  star: Star, clock: Clock, wifi: Wifi, phone: Phone, mail: Mail,
+  star: Star, clock: Clock, calendar: Calendar, wifi: Wifi, phone: Phone, mail: Mail,
   building: Building, 'credit-card': CreditCard, camera: Camera,
   'file-text': FileText, message: MessageSquare, bell: Bell, alert: AlertTriangle,
   coffee: Coffee, utensils: Utensils, home: Home, car: Car, baby: Baby, dog: Dog,

@@ -27,6 +27,9 @@ SMTP_USER=
 SMTP_PASS=
 SMTP_FROM=
 SMTP_USE_TLS=true
+PASSWORD_RESET_CODE_TTL_MINUTES=20
+PASSWORD_RESET_MAX_ATTEMPTS=5
+ALLOW_DEV_PASSWORD_RESET_CODE=true
 ```
 
 Frontend (`frontend/.env`):
@@ -160,8 +163,16 @@ React 19 + Vite (SPA) --> FastAPI (REST API) --> MongoDB
 - Notificaciones automáticas de lead nuevo (email SMTP y/o webhook)
 - Icono de carrito global en navbar para vistas no-admin
 - Login y registro con opcion de mostrar/ocultar contrasena (icono "ojito")
+- Recuperacion de contrasena en login (`Olvide mi contrasena`) con codigo temporal y vencimiento
 - Configuracion de envios por region/comuna de Chile con habilitacion y precios por cobertura
 - Checkout conectado a envios por destino (region/comuna) para cotizacion y orden
+- Editor de perfiles admin con visibilidad por plantilla:
+  - mostrar/ocultar tipo de perfil
+  - mostrar/ocultar botones flotantes
+  - mostrar/ocultar banner negocio
+  - mostrar/ocultar formulario de contacto
+  - mostrar/ocultar boton manual de ubicacion (persona)
+  - foto superior destacada opcional y forma configurable (circular/redondeada/cuadrada)
 
 ## Politica De Imagenes Y UX Frontend
 

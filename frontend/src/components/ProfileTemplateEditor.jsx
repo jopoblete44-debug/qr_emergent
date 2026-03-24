@@ -37,6 +37,7 @@ const ICON_OPTIONS = [
   { value: 'shield', label: 'Escudo', icon: Shield },
   { value: 'star', label: 'Estrella', icon: Star },
   { value: 'clock', label: 'Reloj', icon: Clock },
+  { value: 'calendar', label: 'Calendario', icon: Calendar },
   { value: 'wifi', label: 'WiFi', icon: Wifi },
   { value: 'phone', label: 'Teléfono', icon: Phone },
   { value: 'mail', label: 'Correo', icon: Mail },

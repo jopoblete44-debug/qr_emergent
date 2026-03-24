@@ -53,6 +53,16 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+export const requestPasswordResetCode = async (email) => {
+  const response = await api.post('/auth/forgot-password', { email });
+  return response.data;
+};
+
+export const resetPasswordWithCode = async ({ email, code, new_password }) => {
+  const response = await api.post('/auth/reset-password', { email, code, new_password });
+  return response.data;
+};
+
 export const fetchProducts = async (category = null) => {
   const params = category ? { category } : {};
   const response = await api.get('/products', { params });
@@ -163,6 +173,11 @@ export const fetchMySubscriptions = async () => {
   return response.data;
 };
 
+export const deleteMySubscription = async (bucketId) => {
+  const response = await api.delete(`/subscriptions/${bucketId}`);
+  return response.data;
+};
+
 export const fetchScanHistory = async (params = {}) => {
   const response = await api.get('/scan-history', { params });
   return response.data;
@@ -217,7 +232,10 @@ export const fetchQRProfileDetails = async (profileId) => {
 };
 
 export const fetchProfileTypesConfig = async () => {
-  const response = await api.get('/profile-types-config');
+  const response = await api.get('/profile-types-config', {
+    params: { _t: Date.now() },
+    headers: { 'Cache-Control': 'no-cache' },
+  });
   return response.data;
 };
 
@@ -288,6 +306,26 @@ export const updateAdminUserStatus = async (userId, accountStatus) => {
 
 export const deleteAdminUser = async (userId) => {
   const response = await api.delete(`/admin/users/${userId}`);
+  return response.data;
+};
+
+export const fetchAdminTrash = async (params = {}) => {
+  const response = await api.get('/admin/trash', { params });
+  return response.data;
+};
+
+export const deleteAdminTrashUser = async (userId) => {
+  const response = await api.delete(`/admin/trash/users/${userId}`);
+  return response.data;
+};
+
+export const deleteAdminTrashQRProfile = async (profileId) => {
+  const response = await api.delete(`/admin/trash/qr-profiles/${profileId}`);
+  return response.data;
+};
+
+export const deleteAdminTrashProduct = async (productId) => {
+  const response = await api.delete(`/admin/trash/products/${productId}`);
   return response.data;
 };
 

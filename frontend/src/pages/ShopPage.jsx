@@ -24,7 +24,7 @@ import { fetchProductsWithFilters } from '../utils/api';
 const CATEGORY_LABELS = { personal: 'Personal', business: 'Empresa' };
 const ITEM_TYPE_LABELS = { subscription_service: 'Suscripción', service: 'Servicio', product: 'Producto' };
 const VIEWER_META = {
-  visitor: { label: 'Visitante', summary: 'Estás viendo todo el catálogo.', badge: 'Vista pública' },
+  visitor: { label: 'Visitante', summary: 'Estás viendo solo el catálogo público/general.', badge: 'Vista pública' },
   person: { label: 'Cuenta persona', summary: 'Ves productos públicos y opciones reservadas para cuentas persona.', badge: 'Vista persona' },
   business: { label: 'Cuenta empresa', summary: 'Ves productos públicos y opciones reservadas para cuentas empresa.', badge: 'Vista empresa' },
 };
@@ -87,7 +87,7 @@ const getViewerType = (user) => (user?.user_type === 'person' || user?.user_type
 const isProductVisibleForViewer = (product, viewerType) => {
   const audiences = getLegacyAudienceSet(product.visible_to, product.category);
 
-  if (viewerType === 'visitor') return true;
+  if (viewerType === 'visitor') return audiences.includes('visitor');
   return audiences.includes('visitor') || audiences.includes(viewerType);
 };
 
@@ -150,6 +150,8 @@ export const ShopPage = () => {
   }, [location.state, setCart]);
 
   const handleAddToCart = (product) => { addToCart(product); toast.success(`${product.name} agregado al carrito`); };
+  const handleGoToCart = () => setShowCart(true);
+  const isProductInCart = (productId) => cart.some((item) => item.id === productId);
   const getTotalPrice = () => cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const formatPrice = (price) => new Intl.NumberFormat('es-CL', { style: 'currency', currency: 'CLP' }).format(price);
   const handleCheckout = () => cart.length === 0 ? toast.error('El carrito está vacío') : navigate('/checkout', { state: { cart } });
@@ -250,7 +252,15 @@ export const ShopPage = () => {
               {hiddenCount > 0 && <p className="text-xs text-muted-foreground">Ocultamos automáticamente lo que no corresponde a tu visibilidad efectiva.</p>}
             </div>
             <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
-              {visibleProducts.map((product) => <ProductCard key={product.id} product={product} onAddToCart={handleAddToCart} />)}
+              {visibleProducts.map((product) => (
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  onAddToCart={handleAddToCart}
+                  onGoToCart={handleGoToCart}
+                  inCart={isProductInCart(product.id)}
+                />
+              ))}
             </div>
           </>
         )}

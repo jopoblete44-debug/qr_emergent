@@ -89,6 +89,11 @@ export const LoginPage = () => {
                 {loading ? 'Cargando...' : 'Iniciar Sesión'}
               </Button>
               <p className="text-sm text-center text-muted-foreground">
+                <Link to="/forgot-password" className="text-primary hover:underline" data-testid="login-forgot-password-link">
+                  ¿Olvidaste tu contraseña?
+                </Link>
+              </p>
+              <p className="text-sm text-center text-muted-foreground">
                 ¿No tienes cuenta?{' '}
                 <Link to="/register" className="text-primary hover:underline" data-testid="login-register-link">
                   Regístrate aquí

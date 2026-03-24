@@ -28,6 +28,8 @@ import { Link } from 'react-router-dom';
 
 const DEFAULT_PUBLIC_SETTINGS = {
   request_location_automatically: false,
+  top_profile_photo_enabled: false,
+  top_profile_photo_shape: 'circle',
   floating_buttons: [],
 };
 const FLOATING_BUTTON_ALIASES = {
@@ -56,6 +58,13 @@ const normalizeFloatingButtonType = (buttonType, profileType) => {
 
   return allowedTypes.includes(mappedType) ? mappedType : null;
 };
+const extractFloatingButtonType = (button) => {
+  if (typeof button === 'string') return button;
+  if (button && typeof button === 'object') {
+    return button.type || button.key || button.value || button.button_type || '';
+  }
+  return '';
+};
 
 const normalizePublicSettings = (value, profileType) => {
   const raw = value && typeof value === 'object' ? value : {};
@@ -69,11 +78,44 @@ const normalizePublicSettings = (value, profileType) => {
     request_location_automatically: Boolean(
       raw.request_location_automatically ?? raw.requestLocationAutomatically
     ),
+    top_profile_photo_enabled: Boolean(
+      raw.top_profile_photo_enabled
+      ?? raw.topProfilePhotoEnabled
+      ?? raw.profile_photo_enabled
+    ),
+    top_profile_photo_shape: (() => {
+      const shape = String(
+        raw.top_profile_photo_shape
+        ?? raw.topProfilePhotoShape
+        ?? raw.profile_photo_shape
+        ?? 'circle'
+      ).trim().toLowerCase();
+      if (shape === 'rounded' || shape === 'square') return shape;
+      return 'circle';
+    })(),
     floating_buttons: floatingButtonsSource
-      .map((buttonType) => normalizeFloatingButtonType(buttonType, profileType))
+      .map((buttonType) => normalizeFloatingButtonType(extractFloatingButtonType(buttonType), profileType))
       .filter((buttonType, index, array) => buttonType && array.indexOf(buttonType) === index)
       .slice(0, 3),
   };
+};
+
+const arePublicSettingsEqual = (leftValue, rightValue, profileType) => {
+  const left = normalizePublicSettings(leftValue, profileType);
+  const right = normalizePublicSettings(rightValue, profileType);
+  if (left.request_location_automatically !== right.request_location_automatically) {
+    return false;
+  }
+  if (left.top_profile_photo_enabled !== right.top_profile_photo_enabled) {
+    return false;
+  }
+  if (left.top_profile_photo_shape !== right.top_profile_photo_shape) {
+    return false;
+  }
+  if (left.floating_buttons.length !== right.floating_buttons.length) {
+    return false;
+  }
+  return left.floating_buttons.every((button, index) => button === right.floating_buttons[index]);
 };
 
 const getProfilePublicSettings = (profile) => normalizePublicSettings(
@@ -106,6 +148,7 @@ export const DashboardPage = () => {
   const [profiles, setProfiles] = useState([]);
   const [orders, setOrders] = useState([]);
   const [qrCreationPolicy, setQrCreationPolicy] = useState(null);
+  const [profileTemplatesConfig, setProfileTemplatesConfig] = useState(null);
   const [profileTypeOptions, setProfileTypeOptions] = useState({
     personal: FALLBACK_PERSONAL_SUBTYPES,
     business: FALLBACK_BUSINESS_SUBTYPES,
@@ -122,6 +165,7 @@ export const DashboardPage = () => {
     status: 'indefinite',
     data: {},
     public_settings: DEFAULT_PUBLIC_SETTINGS,
+    public_settings_customized: false,
   });
 
   useEffect(() => {
@@ -138,6 +182,7 @@ export const DashboardPage = () => {
       setProfiles(profilesData);
       setOrders(ordersData);
       if (templatesConfig && typeof templatesConfig === 'object') {
+        setProfileTemplatesConfig(templatesConfig);
         const mapCategory = (category, fallback) => {
           const templates = Array.isArray(templatesConfig?.[category]) ? templatesConfig[category] : [];
           const enabled = templates
@@ -149,6 +194,8 @@ export const DashboardPage = () => {
           personal: mapCategory('personal', FALLBACK_PERSONAL_SUBTYPES),
           business: mapCategory('business', FALLBACK_BUSINESS_SUBTYPES),
         });
+      } else {
+        setProfileTemplatesConfig(null);
       }
       try {
         const policy = await fetchQRCreationPolicy();
@@ -177,9 +224,24 @@ export const DashboardPage = () => {
     }
 
     try {
+      const computedName = (() => {
+        const alias = String(newProfile.alias || '').trim();
+        if (alias) return alias;
+        const subtypeLabel = (newProfile.profile_type === 'personal' ? personalSubTypes : businessSubTypes)
+          .find((option) => option.value === newProfile.sub_type)?.label || 'Perfil QR';
+        return `${subtypeLabel} ${new Date().toLocaleDateString('es-CL')}`;
+      })();
+      const normalizedPublicSettings = normalizePublicSettings(newProfile.public_settings, newProfile.profile_type);
+      const templateDefaults = getTemplateDefaultPublicSettings(newProfile.profile_type, newProfile.sub_type);
       await createQRProfile({
         ...newProfile,
-        public_settings: normalizePublicSettings(newProfile.public_settings, newProfile.profile_type),
+        name: computedName,
+        public_settings: normalizedPublicSettings,
+        public_settings_customized: !arePublicSettingsEqual(
+          normalizedPublicSettings,
+          templateDefaults,
+          newProfile.profile_type
+        ),
       });
       toast.success('Perfil QR creado exitosamente');
       setShowCreateDialog(false);
@@ -191,6 +253,7 @@ export const DashboardPage = () => {
         status: 'indefinite',
         data: {},
         public_settings: DEFAULT_PUBLIC_SETTINGS,
+        public_settings_customized: false,
       });
       loadData();
     } catch (error) {
@@ -200,23 +263,52 @@ export const DashboardPage = () => {
   };
 
   const handleEditProfile = (profile) => {
+    const templateDefaults = (() => {
+      const templates = Array.isArray(profileTemplatesConfig?.[profile?.profile_type]) ? profileTemplatesConfig[profile.profile_type] : [];
+      const template = templates.find((item) => item?.key === profile?.sub_type);
+      return normalizePublicSettings(template?.default_public_settings ?? DEFAULT_PUBLIC_SETTINGS, profile?.profile_type);
+    })();
+    const profilePublicSettings = getProfilePublicSettings(profile);
+    const mergedPublicSettings = normalizePublicSettings(
+      { ...templateDefaults, ...profilePublicSettings },
+      profile?.profile_type
+    );
     setEditingProfile({
       ...profile,
       alias: profile.alias || profile.name,
-      public_settings: getProfilePublicSettings(profile),
+      public_settings: mergedPublicSettings,
+      public_settings_customized: typeof profile?.public_settings_customized === 'boolean'
+        ? profile.public_settings_customized
+        : !arePublicSettingsEqual(mergedPublicSettings, templateDefaults, profile?.profile_type),
     });
     setShowEditDialog(true);
   };
 
   const handleUpdateProfile = async () => {
     try {
+      const computedName = (() => {
+        const alias = String(editingProfile.alias || '').trim();
+        if (alias) return alias;
+        const existingName = String(editingProfile.name || '').trim();
+        if (existingName) return existingName;
+        const subtypeLabel = (editingProfile.profile_type === 'personal' ? personalSubTypes : businessSubTypes)
+          .find((option) => option.value === editingProfile.sub_type)?.label || 'Perfil QR';
+        return `${subtypeLabel} ${new Date().toLocaleDateString('es-CL')}`;
+      })();
+      const normalizedPublicSettings = normalizePublicSettings(editingProfile.public_settings, editingProfile.profile_type);
+      const templateDefaults = getTemplateDefaultPublicSettings(editingProfile.profile_type, editingProfile.sub_type);
       await updateQRProfile(editingProfile.id, {
-        name: editingProfile.name,
+        name: computedName,
         alias: editingProfile.alias,
         profile_type: editingProfile.profile_type,
         sub_type: editingProfile.sub_type,
         data: editingProfile.data,
-        public_settings: normalizePublicSettings(editingProfile.public_settings, editingProfile.profile_type),
+        public_settings: normalizedPublicSettings,
+        public_settings_customized: !arePublicSettingsEqual(
+          normalizedPublicSettings,
+          templateDefaults,
+          editingProfile.profile_type
+        ),
       });
       toast.success('Perfil actualizado exitosamente');
       setShowEditDialog(false);
@@ -281,6 +373,11 @@ export const DashboardPage = () => {
 
   const personalSubTypes = profileTypeOptions.personal || FALLBACK_PERSONAL_SUBTYPES;
   const businessSubTypes = profileTypeOptions.business || FALLBACK_BUSINESS_SUBTYPES;
+  const getTemplateDefaultPublicSettings = (profileType, subType) => {
+    const templates = Array.isArray(profileTemplatesConfig?.[profileType]) ? profileTemplatesConfig[profileType] : [];
+    const template = templates.find((item) => item?.key === subType);
+    return normalizePublicSettings(template?.default_public_settings ?? DEFAULT_PUBLIC_SETTINGS, profileType);
+  };
   const canCreateProfiles = !qrCreationPolicy || qrCreationPolicy.can_create;
   const isPersonUser = user?.user_type === 'person';
   const blockedProfilesCtaHref = isPersonUser
@@ -444,16 +541,6 @@ export const DashboardPage = () => {
                 </TabsList>
                 <TabsContent value="basic" className="space-y-4 py-4">
                   <div className="space-y-2">
-                    <Label htmlFor="name">Nombre del Perfil</Label>
-                    <Input
-                      id="name"
-                      value={newProfile.name}
-                      onChange={(e) => setNewProfile({ ...newProfile, name: e.target.value })}
-                      placeholder="Ej: Mi perfil médico"
-                      data-testid="profile-name-input"
-                    />
-                  </div>
-                  <div className="space-y-2">
                     <Label htmlFor="alias">Alias (Nombre Interno)</Label>
                     <Input
                       id="alias"
@@ -474,7 +561,8 @@ export const DashboardPage = () => {
                           profile_type: value,
                           sub_type: firstSubtype,
                           data: {},
-                          public_settings: normalizePublicSettings(newProfile.public_settings, value),
+                          public_settings: getTemplateDefaultPublicSettings(value, firstSubtype),
+                          public_settings_customized: false,
                         });
                       }}
                     >
@@ -491,7 +579,13 @@ export const DashboardPage = () => {
                     <Label htmlFor="sub_type">Categoría</Label>
                     <Select
                       value={newProfile.sub_type}
-                      onValueChange={(value) => setNewProfile({ ...newProfile, sub_type: value, data: {} })}
+                      onValueChange={(value) => setNewProfile({
+                        ...newProfile,
+                        sub_type: value,
+                        data: {},
+                        public_settings: getTemplateDefaultPublicSettings(newProfile.profile_type, value),
+                        public_settings_customized: false,
+                      })}
                     >
                       <SelectTrigger data-testid="profile-subtype-select">
                         <SelectValue />
@@ -532,7 +626,15 @@ export const DashboardPage = () => {
                     data={newProfile.data}
                     onChange={(data) => setNewProfile({ ...newProfile, data })}
                     publicSettings={newProfile.public_settings}
-                    onPublicSettingsChange={(public_settings) => setNewProfile({ ...newProfile, public_settings })}
+                    onPublicSettingsChange={(public_settings) => {
+                      const templateDefaults = getTemplateDefaultPublicSettings(newProfile.profile_type, newProfile.sub_type);
+                      setNewProfile({
+                        ...newProfile,
+                        public_settings,
+                        public_settings_customized: !arePublicSettingsEqual(public_settings, templateDefaults, newProfile.profile_type),
+                      });
+                    }}
+                    profileTypesConfig={profileTemplatesConfig}
                   />
                 </TabsContent>
               </Tabs>
@@ -564,15 +666,6 @@ export const DashboardPage = () => {
                   </TabsList>
                   <TabsContent value="basic" className="space-y-4 py-4">
                     <div className="space-y-2">
-                      <Label htmlFor="edit-name">Nombre del Perfil</Label>
-                      <Input
-                        id="edit-name"
-                        value={editingProfile.name}
-                        onChange={(e) => setEditingProfile({ ...editingProfile, name: e.target.value })}
-                        data-testid="edit-profile-name-input"
-                      />
-                    </div>
-                    <div className="space-y-2">
                       <Label htmlFor="edit-alias">Nombre Interno (Alias)</Label>
                       <Input
                         id="edit-alias"
@@ -584,10 +677,15 @@ export const DashboardPage = () => {
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="edit-sub-type">Categoría</Label>
-                      <Select
-                        value={editingProfile.sub_type}
-                        onValueChange={(value) => setEditingProfile({ ...editingProfile, sub_type: value })}
-                      >
+                    <Select
+                      value={editingProfile.sub_type}
+                      onValueChange={(value) => setEditingProfile({
+                        ...editingProfile,
+                        sub_type: value,
+                        public_settings: getTemplateDefaultPublicSettings(editingProfile.profile_type, value),
+                        public_settings_customized: false,
+                      })}
+                    >
                         <SelectTrigger>
                           <SelectValue />
                         </SelectTrigger>
@@ -611,7 +709,15 @@ export const DashboardPage = () => {
                       data={editingProfile.data || {}}
                       onChange={(data) => setEditingProfile({ ...editingProfile, data })}
                       publicSettings={editingProfile.public_settings || DEFAULT_PUBLIC_SETTINGS}
-                      onPublicSettingsChange={(public_settings) => setEditingProfile({ ...editingProfile, public_settings })}
+                      onPublicSettingsChange={(public_settings) => {
+                        const templateDefaults = getTemplateDefaultPublicSettings(editingProfile.profile_type, editingProfile.sub_type);
+                        setEditingProfile({
+                          ...editingProfile,
+                          public_settings,
+                          public_settings_customized: !arePublicSettingsEqual(public_settings, templateDefaults, editingProfile.profile_type),
+                        });
+                      }}
+                      profileTypesConfig={profileTemplatesConfig}
                     />
                   </TabsContent>
                 </Tabs>

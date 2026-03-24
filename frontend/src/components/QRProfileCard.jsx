@@ -23,6 +23,8 @@ const SUB_TYPE_CONFIG = {
 };
 
 export const QRProfileCard = ({ profile, onDownloadQR, onToggleStatus, onDelete, onEdit, onViewProfile, showActions = true }) => {
+  const internalAlias = String(profile.alias || profile.name || '').trim() || `qr-${profile.hash?.slice(0, 6) || profile.id}`;
+
   const getStatusBadge = (status) => {
     const variants = {
       subscription: 'default',
@@ -45,11 +47,9 @@ export const QRProfileCard = ({ profile, onDownloadQR, onToggleStatus, onDelete,
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <Link to={`/qr/${profile.id}`} className="hover:underline">
-              <CardTitle className="font-heading text-lg truncate">{profile.name}</CardTitle>
+              <CardTitle className="font-heading text-lg truncate">{internalAlias}</CardTitle>
             </Link>
-            {profile.alias && profile.alias !== profile.name && (
-              <p className="text-xs text-muted-foreground mt-0.5 truncate">{profile.alias}</p>
-            )}
+            <p className="text-xs text-muted-foreground mt-0.5 truncate">Alias interno</p>
           </div>
           {getStatusBadge(profile.status)}
         </div>

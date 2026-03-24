@@ -217,3 +217,39 @@ Fuentes de inspiracion (web):
 - Mejora de Services publica y AdminStore:
   - mejor presentacion del catalogo
   - mejor correspondencia entre lo que se publica y lo que se administra.
+
+## 14) Recuperacion de Contrasena (Olvide mi contrasena)
+
+- Nuevo flujo en autenticacion:
+  - `POST /api/auth/forgot-password`
+  - `POST /api/auth/reset-password`
+- El backend genera codigo temporal (6 digitos), con vencimiento y limite de intentos.
+- El login ahora enlaza la pagina `/forgot-password`.
+- Si SMTP esta configurado, el codigo se envia por correo.
+- En desarrollo, puede devolverse `dev_reset_code` (controlado por `ALLOW_DEV_PASSWORD_RESET_CODE`).
+
+## 15) Perfiles Mejorados para Persona/Empresa + Control Admin por Plantilla
+
+- Mejoras visuales del perfil publico:
+  - foto superior destacada opcional
+  - forma configurable de foto (circular / redondeada / cuadrada)
+  - header con highlights clave (rating, horario, contacto, datos criticos)
+  - barra flotante de acciones mas limpia y consistente en movil.
+- Se amplia la configuracion por plantilla en admin (`Editor de Perfiles`):
+  - `display_options` para mostrar/ocultar bloques clave segun tipo.
+- Nuevos campos sugeridos para plantillas base:
+  - Restaurante: link de reservas, WhatsApp reservas, link de reseñas, rango de precio, tiempo de entrega.
+  - Hotel: link de reserva, telefono recepcion, info de emergencia.
+  - Medico: seguro de salud, instrucciones de emergencia.
+  - Mascota: id de microchip, cuidados especiales.
+  - Vehiculo: aseguradora, asistencia en ruta.
+  - Nino/Adulto mayor: preferencias de comunicacion, punto seguro.
+
+### Fuentes de referencia para benchmark UX/perfiles
+
+- Popl (tarjetas digitales para equipos, lead capture y analitica):
+  - https://support.popl.co/en/articles/12293864-popl-digital-business-cards-what-s-in-it-for-your-team
+- PetHub (QR para mascotas, foco en privacidad y datos visibles):
+  - https://www.pethub.com/articles/4070545/qr-pet-id-tags-privacy-what-you-need-to-know
+- OWASP (buenas practicas de flujo forgot-password):
+  - https://cheatsheetseries.owasp.org/cheatsheets/Forgot_Password_Cheat_Sheet.html

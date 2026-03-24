@@ -2,7 +2,7 @@ import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
 import {
-  LayoutDashboard, QrCode, Users, Settings, BarChart3, FileEdit, Moon, Sun, Menu, Package, Inbox
+  LayoutDashboard, QrCode, Users, Settings, BarChart3, FileEdit, Moon, Sun, Menu, Package, Inbox, Trash2
 } from 'lucide-react';
 import { Button } from './ui/button';
 import {
@@ -21,6 +21,7 @@ const adminNavItems = [
   { title: 'Leads', icon: Inbox, href: '/admin/leads' },
   { title: 'Editor de Perfiles', icon: FileEdit, href: '/admin/profile-editor' },
   { title: 'Productos y Servicios', icon: Package, href: '/admin/store' },
+  { title: 'Papelera', icon: Trash2, href: '/admin/trash' },
   { title: 'Analítica', icon: BarChart3, href: '/admin/analytics' },
   { title: 'Configuración', icon: Settings, href: '/admin/settings' },
 ];

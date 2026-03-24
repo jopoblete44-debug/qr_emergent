@@ -47,6 +47,12 @@ const SUB_TYPE_LABELS = {
 
 const STATUS_LABELS = { indefinite: 'Indefinido', subscription: 'Suscripción', paused: 'Pausado' };
 const STATUS_VARIANTS = { indefinite: 'secondary', subscription: 'default', paused: 'destructive' };
+const DEFAULT_PUBLIC_SETTINGS = {
+  request_location_automatically: false,
+  top_profile_photo_enabled: false,
+  top_profile_photo_shape: 'circle',
+  floating_buttons: [],
+};
 
 const FALLBACK_PERSONAL_SUBTYPES = [
   { value: 'medico', label: 'Médico' },
@@ -314,7 +320,8 @@ export const AdminQRProfilesPage = () => {
         sub_type: createForm.sub_type,
         status: createForm.status,
         data: {},
-        notification_config: {},
+        public_settings: DEFAULT_PUBLIC_SETTINGS,
+        public_settings_customized: false,
         expiration_date: null,
       });
       toast.success('Perfil QR creado');

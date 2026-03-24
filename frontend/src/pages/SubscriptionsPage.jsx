@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
-import { CalendarClock, CreditCard, RefreshCw, ShieldCheck, ShoppingBag } from 'lucide-react';
+import { CalendarClock, CreditCard, RefreshCw, ShieldCheck, ShoppingBag, Trash2 } from 'lucide-react';
 import { DashboardLayout } from '../components/DashboardLayout';
 import { ProtectedRoute } from '../components/ProtectedRoute';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
-import { fetchMySubscriptions, fetchProductsWithFilters } from '../utils/api';
+import { deleteMySubscription, fetchMySubscriptions, fetchProductsWithFilters } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 
 const STATUS_META = {
@@ -23,6 +23,7 @@ export const SubscriptionsPage = () => {
   const [subscriptionsData, setSubscriptionsData] = useState(null);
   const [subscriptionProducts, setSubscriptionProducts] = useState([]);
   const [renewingKey, setRenewingKey] = useState('');
+  const [deletingKey, setDeletingKey] = useState('');
 
   const isBusiness = user?.user_type === 'business';
 
@@ -96,6 +97,27 @@ export const SubscriptionsPage = () => {
         renewal_bucket_id: subscription.id,
       },
     });
+  };
+
+  const handleDeleteSubscription = async (subscription) => {
+    if (!subscriptionsData?.is_master_account) {
+      toast.error('Solo la cuenta master puede eliminar suscripciones');
+      return;
+    }
+    if (!window.confirm(`¿Eliminar definitivamente la suscripción "${subscription.product_name || 'Suscripción QR'}"?`)) {
+      return;
+    }
+
+    try {
+      setDeletingKey(subscription.id);
+      const updated = await deleteMySubscription(subscription.id);
+      setSubscriptionsData(updated);
+      toast.success('Suscripción eliminada');
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'No se pudo eliminar la suscripción');
+    } finally {
+      setDeletingKey('');
+    }
   };
 
   if (loading) {
@@ -247,6 +269,16 @@ export const SubscriptionsPage = () => {
                             <CreditCard className="mr-2 h-3.5 w-3.5" />
                             Renovar 1 año
                             {yearlyProduct ? ` · ${formatPrice(yearlyProduct.price)}` : ' · no disponible'}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="destructive"
+                            disabled={!subscriptionsData?.is_master_account || deletingKey === subscription.id}
+                            onClick={() => handleDeleteSubscription(subscription)}
+                            data-testid={`delete-subscription-${subscription.id}`}
+                          >
+                            <Trash2 className="mr-2 h-3.5 w-3.5" />
+                            {deletingKey === subscription.id ? 'Eliminando...' : 'Eliminar suscripción'}
                           </Button>
                           {renewingKey.startsWith(`${subscription.id}-`) && (
                             <span className="text-xs text-muted-foreground flex items-center">

@@ -99,6 +99,7 @@ const TEMPLATE_ICON_MAP = {
   shield: Shield,
   star: Star,
   clock: Clock,
+  calendar: CalendarDays,
   wifi: Wifi,
   phone: Phone,
   mail: Mail,
@@ -157,27 +158,31 @@ const normalizeFloatingButtonType = (buttonType, profileType) => {
 
   return allowedTypes.includes(mappedType) ? mappedType : null;
 };
+const extractFloatingButtonType = (button) => {
+  if (typeof button === 'string') return button;
+  if (button && typeof button === 'object') {
+    return button.type || button.key || button.value || button.button_type || '';
+  }
+  return '';
+};
+const withAlpha = (hexColor, alpha = 1) => {
+  if (typeof hexColor !== 'string') return null;
+  const raw = hexColor.trim().replace('#', '');
+  if (![3, 6].includes(raw.length)) return null;
+  const normalized = raw.length === 3 ? raw.split('').map((item) => item + item).join('') : raw;
+  const numeric = Number.parseInt(normalized, 16);
+  if (Number.isNaN(numeric)) return null;
+  const red = (numeric >> 16) & 255;
+  const green = (numeric >> 8) & 255;
+  const blue = numeric & 255;
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+};
 const buildGoogleReviewUrl = (data) => {
   if (!data || typeof data !== 'object') return null;
   const directLink = normalizePublicActionUrl(data.google_review_link || data.review_url || data.tripadvisor_url);
   if (directLink) return directLink;
   const placeId = String(data.google_review_place_id || '').trim();
   return placeId ? `https://search.google.com/local/writereview?placeid=${encodeURIComponent(placeId)}` : null;
-};
-const buildProfileLocationUrl = (data) => {
-  if (!data || typeof data !== 'object') return null;
-
-  const latitude = Number(data.lat ?? data.latitude);
-  const longitude = Number(data.lng ?? data.longitude ?? data.lon);
-  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
-    return `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
-  }
-
-  const address = [data.address, data.location, data.map_address]
-    .map((value) => String(value || '').trim())
-    .find(Boolean);
-
-  return address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}` : null;
 };
 const resolveProfileImageUrl = (value, { trustExplicitImageField = false } = {}) => {
   if (!value || typeof value !== 'string') return null;
@@ -222,6 +227,16 @@ const getPersonalPhoto = (subType, data) => {
     nino: ['photo_url', 'child_photo_url', 'avatar_url', 'image_url'],
   };
   return getFirstImageFromData(data, candidateBySubtype[subType] || ['photo_url', 'avatar_url', 'image_url']);
+};
+const getTopProfilePhoto = (profileType, data, fallbackBusinessLogoUrl = null) => {
+  const prioritizedCandidates = profileType === 'business'
+    ? ['top_profile_photo_url', 'logo_url', 'avatar_url', 'photo_url', 'image_url']
+    : ['top_profile_photo_url', 'photo_url', 'avatar_url', 'patient_photo_url', 'pet_photo_url', 'child_photo_url', 'vehicle_photo_url', 'image_url'];
+
+  const direct = getFirstImageFromData(data, prioritizedCandidates);
+  if (direct) return direct;
+  if (profileType === 'business' && fallbackBusinessLogoUrl) return fallbackBusinessLogoUrl;
+  return null;
 };
 const getPublicProfileTitle = (profile, data) => {
   const safeData = data && typeof data === 'object' ? data : {};
@@ -339,12 +354,78 @@ export const PublicProfilePage = () => {
   const publicSettings = profile?.public_settings && typeof profile.public_settings === 'object'
     ? profile.public_settings
     : {};
-  const requestLocationAutomatically = Boolean(
+  const templateDefaultPublicSettings = profile?.template?.default_public_settings && typeof profile.template.default_public_settings === 'object'
+    ? profile.template.default_public_settings
+    : {};
+  const templateHasAutoLocationConfig = (
+    Object.prototype.hasOwnProperty.call(templateDefaultPublicSettings, 'request_location_automatically')
+    || Object.prototype.hasOwnProperty.call(templateDefaultPublicSettings, 'requestLocationAutomatically')
+  );
+  const templateHasTopPhotoEnabledConfig = (
+    Object.prototype.hasOwnProperty.call(templateDefaultPublicSettings, 'top_profile_photo_enabled')
+    || Object.prototype.hasOwnProperty.call(templateDefaultPublicSettings, 'topProfilePhotoEnabled')
+    || Object.prototype.hasOwnProperty.call(templateDefaultPublicSettings, 'profile_photo_enabled')
+  );
+  const templateHasTopPhotoShapeConfig = (
+    Object.prototype.hasOwnProperty.call(templateDefaultPublicSettings, 'top_profile_photo_shape')
+    || Object.prototype.hasOwnProperty.call(templateDefaultPublicSettings, 'topProfilePhotoShape')
+    || Object.prototype.hasOwnProperty.call(templateDefaultPublicSettings, 'profile_photo_shape')
+  );
+  const useProfilePublicOverrides = profile?.public_settings_customized === true;
+  const profileRequestLocation = (
     publicSettings.request_location_automatically
     ?? publicSettings.requestLocationAutomatically
     ?? notificationConfig.request_location_automatically
     ?? notificationConfig.requestLocationAutomatically
   );
+  const templateRequestLocation = (
+    templateDefaultPublicSettings.request_location_automatically
+    ?? templateDefaultPublicSettings.requestLocationAutomatically
+  );
+  const requestLocationAutomatically = Boolean(
+    useProfilePublicOverrides
+      ? profileRequestLocation
+      : (templateHasAutoLocationConfig ? templateRequestLocation : profileRequestLocation)
+  );
+  const profileTopPhotoEnabled = (
+    publicSettings.top_profile_photo_enabled
+    ?? publicSettings.topProfilePhotoEnabled
+    ?? publicSettings.profile_photo_enabled
+    ?? notificationConfig.top_profile_photo_enabled
+    ?? notificationConfig.topProfilePhotoEnabled
+    ?? notificationConfig.profile_photo_enabled
+  );
+  const templateTopPhotoEnabled = (
+    templateDefaultPublicSettings.top_profile_photo_enabled
+    ?? templateDefaultPublicSettings.topProfilePhotoEnabled
+    ?? templateDefaultPublicSettings.profile_photo_enabled
+  );
+  const topProfilePhotoEnabled = Boolean(
+    useProfilePublicOverrides
+      ? profileTopPhotoEnabled
+      : (templateHasTopPhotoEnabledConfig ? templateTopPhotoEnabled : profileTopPhotoEnabled)
+  );
+  const profileTopPhotoShapeRaw = String(
+    publicSettings.top_profile_photo_shape
+    ?? publicSettings.topProfilePhotoShape
+    ?? publicSettings.profile_photo_shape
+    ?? notificationConfig.top_profile_photo_shape
+    ?? notificationConfig.topProfilePhotoShape
+    ?? notificationConfig.profile_photo_shape
+    ?? 'circle'
+  ).trim().toLowerCase();
+  const templateTopPhotoShapeRaw = String(
+    templateDefaultPublicSettings.top_profile_photo_shape
+    ?? templateDefaultPublicSettings.topProfilePhotoShape
+    ?? templateDefaultPublicSettings.profile_photo_shape
+    ?? 'circle'
+  ).trim().toLowerCase();
+  const topProfilePhotoShapeRaw = useProfilePublicOverrides
+    ? profileTopPhotoShapeRaw
+    : (templateHasTopPhotoShapeConfig ? templateTopPhotoShapeRaw : profileTopPhotoShapeRaw);
+  const topProfilePhotoShape = (topProfilePhotoShapeRaw === 'rounded' || topProfilePhotoShapeRaw === 'square')
+    ? topProfilePhotoShapeRaw
+    : 'circle';
 
   useEffect(() => {
     if (!leadFormConfig.captcha_enabled || !leadFormConfig.turnstile_site_key) {
@@ -414,7 +495,7 @@ export const PublicProfilePage = () => {
   }, [leadFormConfig.captcha_enabled, leadFormConfig.turnstile_site_key]);
 
   useEffect(() => {
-    if (!profile || profile.profile_type !== 'personal' || !requestLocationAutomatically) {
+    if (!profile || !requestLocationAutomatically) {
       return undefined;
     }
     if (autoLocationTriggeredRef.current) {
@@ -422,16 +503,6 @@ export const PublicProfilePage = () => {
     }
 
     autoLocationTriggeredRef.current = true;
-    const storageKey = `qr:auto-location:${hash}`;
-
-    try {
-      if (window.sessionStorage.getItem(storageKey) === '1') {
-        return undefined;
-      }
-      window.sessionStorage.setItem(storageKey, '1');
-    } catch (_) {
-      // Ignore storage failures and continue with a single in-memory attempt.
-    }
 
     let cancelled = false;
     let timeoutId = null;
@@ -519,8 +590,82 @@ export const PublicProfilePage = () => {
   }
 
   const d = profile.data || {};
-  const theme = THEME_COLORS[profile.sub_type] || { bg: 'bg-background', accent: 'text-primary', border: 'border-border' };
   const template = profile.template && Array.isArray(profile.template.sections) ? profile.template : null;
+  const fallbackTheme = THEME_COLORS[profile.sub_type] || { bg: 'bg-background', accent: 'text-primary', border: 'border-border' };
+  const templateTheme = template?.theme && typeof template.theme === 'object' ? template.theme : {};
+  const templateDisplayOptions = template?.display_options && typeof template.display_options === 'object'
+    ? template.display_options
+    : {};
+  const templatePrimaryColor = typeof templateTheme.primary_color === 'string' && templateTheme.primary_color.trim()
+    ? templateTheme.primary_color.trim()
+    : null;
+  const templateBgColor = typeof templateTheme.bg_color === 'string' && templateTheme.bg_color.trim()
+    ? templateTheme.bg_color.trim()
+    : null;
+  const theme = fallbackTheme;
+  const templateSectionStyle = templatePrimaryColor || templateBgColor
+    ? {
+      borderColor: templatePrimaryColor || undefined,
+      backgroundColor: templateBgColor || undefined,
+    }
+    : undefined;
+  const templateIconWrapperStyle = templatePrimaryColor || templateBgColor
+    ? {
+      borderColor: templatePrimaryColor || undefined,
+      backgroundColor: templateBgColor || undefined,
+    }
+    : undefined;
+  const templateIconStyle = templatePrimaryColor ? { color: templatePrimaryColor } : undefined;
+  const pageThemeStyle = templateBgColor ? { backgroundColor: templateBgColor } : undefined;
+  const cardPrimaryColor = templatePrimaryColor || undefined;
+  const cardBorderSoft = templatePrimaryColor ? withAlpha(templatePrimaryColor, 0.35) : undefined;
+  const cardGlowSoft = templatePrimaryColor ? withAlpha(templatePrimaryColor, 0.16) : undefined;
+  const cardHeaderStyle = templatePrimaryColor
+    ? {
+      background: `linear-gradient(150deg, ${withAlpha(templatePrimaryColor, 0.2) || 'rgba(59,130,246,.15)'} 0%, rgba(255,255,255,0) 70%)`,
+    }
+    : undefined;
+  const publicCardStyle = cardBorderSoft || cardGlowSoft
+    ? {
+      borderColor: cardBorderSoft,
+      boxShadow: cardGlowSoft ? `0 18px 45px -28px ${cardGlowSoft}` : undefined,
+    }
+    : undefined;
+  const floatingPanelStyle = {
+    borderColor: cardBorderSoft || undefined,
+    boxShadow: cardGlowSoft ? `0 22px 38px -26px ${cardGlowSoft}` : undefined,
+  };
+  const floatingPrimaryStyle = templatePrimaryColor
+    ? {
+      backgroundColor: templatePrimaryColor,
+      borderColor: templatePrimaryColor,
+      color: '#ffffff',
+    }
+    : undefined;
+  const floatingOutlineStyle = templatePrimaryColor
+    ? {
+      borderColor: withAlpha(templatePrimaryColor, 0.35) || undefined,
+      color: templatePrimaryColor,
+      backgroundColor: withAlpha(templatePrimaryColor, 0.08) || undefined,
+    }
+    : undefined;
+  const showProfileTypeBadge = Boolean(
+    templateDisplayOptions.show_profile_type_badge ?? templateDisplayOptions.showProfileTypeBadge ?? true
+  );
+  const showBusinessBanner = profile.profile_type === 'business'
+    ? Boolean(templateDisplayOptions.show_business_banner ?? templateDisplayOptions.showBusinessBanner ?? true)
+    : false;
+  const showFloatingActionsByTemplate = Boolean(
+    templateDisplayOptions.show_floating_actions ?? templateDisplayOptions.showFloatingActions ?? true
+  );
+  const showLeadFormByTemplate = Boolean(
+    templateDisplayOptions.show_lead_form
+    ?? templateDisplayOptions.showLeadForm
+    ?? (profile.profile_type === 'business')
+  );
+  const showManualLocationButtonByTemplate = profile.profile_type === 'personal'
+    ? Boolean(templateDisplayOptions.show_manual_location_button ?? templateDisplayOptions.showManualLocationButton ?? true)
+    : false;
 
   const renderMedical = () => {
     const photoSrc = getPersonalPhoto('medico', d);
@@ -621,8 +766,10 @@ export const PublicProfilePage = () => {
     );
   };
 
-  const renderTemplateSections = () => (
-    <div className="space-y-4">
+  const renderTemplateSections = () => {
+    const useCompactTemplateLayout = (template?.sections?.length || 0) <= 1;
+    return (
+    <div className={useCompactTemplateLayout ? 'space-y-3' : 'space-y-4'}>
       {(template?.sections || []).map((section) => {
         const visibleFields = (section.fields || []).filter((field) => field?.visible !== false);
         const SectionIcon = getTemplateIcon(section.icon);
@@ -728,13 +875,22 @@ export const PublicProfilePage = () => {
         if (!renderedFields.length) return null;
 
         return (
-          <section key={section.id || section.title} className={`space-y-3 rounded-xl border ${theme.border} bg-background/80 p-4 shadow-sm`}>
+          <section
+            key={section.id || section.title}
+            className={useCompactTemplateLayout
+              ? 'space-y-3'
+              : `space-y-3 rounded-xl border ${theme.border} bg-background/80 p-4 shadow-sm`}
+            style={useCompactTemplateLayout ? undefined : templateSectionStyle}
+          >
             {(section.title || section.description) && (
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
                   {SectionIcon && (
-                    <div className={`w-7 h-7 rounded-full flex items-center justify-center ${theme.bg} border ${theme.border}`}>
-                      <SectionIcon className={`h-3.5 w-3.5 ${theme.accent}`} />
+                    <div
+                      className={`w-7 h-7 rounded-full flex items-center justify-center ${theme.bg} border ${theme.border}`}
+                      style={templateIconWrapperStyle}
+                    >
+                      <SectionIcon className={`h-3.5 w-3.5 ${theme.accent}`} style={templateIconStyle} />
                     </div>
                   )}
                   {section.title && <h3 className="font-semibold text-base">{section.title}</h3>}
@@ -750,6 +906,7 @@ export const PublicProfilePage = () => {
       })}
     </div>
   );
+  };
 
   const renderVehicle = () => {
     const photoSrc = getPersonalPhoto('vehiculo', d);
@@ -1206,7 +1363,12 @@ export const PublicProfilePage = () => {
   };
   const ProfileIcon = SUB_TYPE_ICONS[profile.sub_type] || QrCode;
   const profileActions = Array.isArray(profile.actions) ? profile.actions : [];
+  const profileTypeLabel = profile.profile_type === 'business'
+    ? (BUSINESS_TYPE_LABELS[profile.sub_type] || 'Perfil Empresa')
+    : (PERSONAL_TYPE_LABELS[profile.sub_type] || 'Perfil personal');
   const publicProfileTitle = getPublicProfileTitle(profile, d);
+  const titleIsTypeFallback = String(publicProfileTitle || '').trim() === String(profileTypeLabel || '').trim();
+  const displayProfileTitle = titleIsTypeFallback ? 'Perfil QR' : publicProfileTitle;
   const businessSubtitle = d.description || d.welcome_message || d.business_name || d.hotel_name || d.display_name || '';
   const businessBannerUrl = getFirstImageFromData(d, [
     'cover_image',
@@ -1222,14 +1384,54 @@ export const PublicProfilePage = () => {
     'avatar',
     'avatar_url',
   ]);
-  const selectedFloatingButtons = (
+  const topProfilePhotoUrl = getTopProfilePhoto(profile.profile_type, d, businessLogoUrl);
+  const topProfilePhotoShapeClass = topProfilePhotoShape === 'square'
+    ? 'rounded-md'
+    : topProfilePhotoShape === 'rounded'
+      ? 'rounded-2xl'
+      : 'rounded-full';
+  const headerHighlights = (() => {
+    const highlights = [];
+    if (profile.profile_type === 'business') {
+      const ratingValue = d.google_rating || d.rating || d.average_rating;
+      if (ratingValue) highlights.push(`★ ${ratingValue}/5`);
+      if (d.review_count || d.google_review_count) highlights.push(`${d.review_count || d.google_review_count} reseñas`);
+      if (d.schedule || d.hours) highlights.push(`Horario: ${d.schedule || d.hours}`);
+      if (d.price_range) highlights.push(`Precio: ${d.price_range}`);
+      if (d.delivery_time) highlights.push(`Entrega: ${d.delivery_time}`);
+      if (d.address) highlights.push(`Dirección: ${d.address}`);
+      if (d.phone || d.contact_phone) highlights.push(`Tel: ${d.phone || d.contact_phone}`);
+    } else {
+      if (profile.sub_type === 'medico' && d.blood_type) highlights.push(`Tipo: ${d.blood_type}`);
+      if (profile.sub_type === 'medico' && d.allergies) highlights.push('Alergias registradas');
+      if (profile.sub_type === 'mascota' && d.species) highlights.push(String(d.species));
+      if (profile.sub_type === 'mascota' && d.breed) highlights.push(String(d.breed));
+      if (profile.sub_type === 'vehiculo' && d.plate) highlights.push(`Patente: ${d.plate}`);
+      if (profile.sub_type === 'nino' && d.guardian_phone) highlights.push(`Tutor: ${d.guardian_phone}`);
+    }
+    return highlights.filter(Boolean).slice(0, 4);
+  })();
+  const profileFloatingButtonsSource = (
     Array.isArray(publicSettings.floating_buttons) ? publicSettings.floating_buttons
       : Array.isArray(publicSettings.floatingButtons) ? publicSettings.floatingButtons
       : Array.isArray(notificationConfig.floating_buttons) ? notificationConfig.floating_buttons
       : Array.isArray(notificationConfig.floatingButtons) ? notificationConfig.floatingButtons
       : []
-  )
-    .map((item) => normalizeFloatingButtonType(item, profile.profile_type))
+  );
+  const templateFloatingButtonsSource = (
+    Array.isArray(templateDefaultPublicSettings.floating_buttons) ? templateDefaultPublicSettings.floating_buttons
+      : Array.isArray(templateDefaultPublicSettings.floatingButtons) ? templateDefaultPublicSettings.floatingButtons
+      : []
+  );
+  const templateHasFloatingButtonsConfig = (
+    Object.prototype.hasOwnProperty.call(templateDefaultPublicSettings, 'floating_buttons')
+    || Object.prototype.hasOwnProperty.call(templateDefaultPublicSettings, 'floatingButtons')
+  );
+  const selectedFloatingButtonsSource = useProfilePublicOverrides
+    ? profileFloatingButtonsSource
+    : (templateHasFloatingButtonsConfig ? templateFloatingButtonsSource : profileFloatingButtonsSource);
+  const selectedFloatingButtons = selectedFloatingButtonsSource
+    .map((item) => normalizeFloatingButtonType(extractFloatingButtonType(item), profile.profile_type))
     .filter((item, index, array) => item && array.indexOf(item) === index)
     .slice(0, 3);
   const resolvedFloatingButtonsSource = (
@@ -1271,15 +1473,16 @@ export const PublicProfilePage = () => {
   const emergencyPhone = [d.emergency_phone, d.contact_phone].find(Boolean);
   const businessPhone = [d.phone, d.contact_phone, d.business_phone].find(Boolean);
   const fallbackFloatingButtons = selectedFloatingButtons.map((buttonType) => {
-    if (buttonType === 'send_location' && profile.profile_type === 'personal') {
-      const locationUrl = buildProfileLocationUrl(d);
-      return locationUrl ? { type: 'send_location', label: 'Enviar ubicación', url: locationUrl } : null;
+    if (buttonType === 'send_location') {
+      return { type: 'send_location', label: 'Enviar ubicación', url: 'action://send-location' };
     }
     if (buttonType === 'whatsapp') {
       const existingWhatsappAction = profileActions.find((action) => action?.type === 'whatsapp' && action?.url);
       if (existingWhatsappAction) return existingWhatsappAction;
       const whatsappPhone = normalizePhoneValue(primaryPhone);
-      if (!whatsappPhone) return null;
+      if (!whatsappPhone) {
+        return { type: 'whatsapp', label: 'WhatsApp', url: 'action://requires-whatsapp-phone' };
+      }
       return {
         type: 'whatsapp',
         label: 'WhatsApp',
@@ -1290,37 +1493,51 @@ export const PublicProfilePage = () => {
       const googleReviewAction = profileActions.find((action) => action?.type === 'google_review' && action?.url);
       if (googleReviewAction) return googleReviewAction;
       const reviewUrl = buildGoogleReviewUrl(d);
-      return reviewUrl ? { type: 'rate_restaurant', label: 'Calificar negocio', url: reviewUrl } : null;
+      return reviewUrl
+        ? { type: 'rate_restaurant', label: 'Calificar negocio', url: reviewUrl }
+        : { type: 'rate_restaurant', label: 'Calificar negocio', url: 'action://requires-review-url' };
     }
     if (buttonType === 'call_contact') {
       const normalizedPhone = normalizePhoneValue(contactPhone);
-      return normalizedPhone ? { type: 'call_contact', label: 'Llamar contacto', url: `tel:+${normalizedPhone}` } : null;
+      return normalizedPhone
+        ? { type: 'call_contact', label: 'Llamar contacto', url: `tel:+${normalizedPhone}` }
+        : { type: 'call_contact', label: 'Llamar contacto', url: 'action://requires-contact-phone' };
     }
     if (buttonType === 'call_emergency') {
       const normalizedPhone = normalizePhoneValue(emergencyPhone);
-      return normalizedPhone ? { type: 'call_emergency', label: 'Llamar emergencia', url: `tel:+${normalizedPhone}` } : null;
+      return normalizedPhone
+        ? { type: 'call_emergency', label: 'Llamar emergencia', url: `tel:+${normalizedPhone}` }
+        : { type: 'call_emergency', label: 'Llamar emergencia', url: 'action://requires-emergency-phone' };
     }
     if (buttonType === 'call_business') {
       const normalizedPhone = normalizePhoneValue(businessPhone);
-      return normalizedPhone ? { type: 'call_business', label: 'Llamar negocio', url: `tel:+${normalizedPhone}` } : null;
+      return normalizedPhone
+        ? { type: 'call_business', label: 'Llamar negocio', url: `tel:+${normalizedPhone}` }
+        : { type: 'call_business', label: 'Llamar negocio', url: 'action://requires-business-phone' };
     }
     if (buttonType === 'share_profile') {
       return { type: 'share_profile', label: 'Compartir perfil', url: window.location.href };
     }
     if (buttonType === 'send_survey') {
       const surveyUrl = normalizePublicActionUrl(d.survey_url || d.feedback_url || d.form_url || d.google_form_url);
-      return surveyUrl ? { type: 'send_survey', label: 'Responder encuesta', url: surveyUrl } : null;
+      return surveyUrl
+        ? { type: 'send_survey', label: 'Responder encuesta', url: surveyUrl }
+        : { type: 'send_survey', label: 'Responder encuesta', url: 'action://requires-survey-url' };
     }
     if (buttonType === 'view_catalog_pdf') {
       const catalogUrl = normalizePublicActionUrl(d.catalog_pdf_url || d.catalog_url || d.menu_pdf_url || d.menu_url || d.pdf_url);
-      return catalogUrl ? { type: 'view_catalog_pdf', label: 'Ver catálogo', url: catalogUrl } : null;
+      return catalogUrl
+        ? { type: 'view_catalog_pdf', label: 'Ver catálogo', url: catalogUrl }
+        : { type: 'view_catalog_pdf', label: 'Ver catálogo', url: 'action://requires-catalog-url' };
     }
     if (buttonType === 'google_review') {
       return profileActions.find((action) => action?.type === 'google_review' && action?.url) || null;
     }
     if (buttonType === 'website') {
       const websiteUrl = normalizePublicActionUrl(d.website || d.site_url);
-      return websiteUrl ? { type: 'website', label: 'Sitio web', url: websiteUrl } : null;
+      return websiteUrl
+        ? { type: 'website', label: 'Sitio web', url: websiteUrl }
+        : { type: 'website', label: 'Sitio web', url: 'action://requires-website-url' };
     }
     return null;
   });
@@ -1331,12 +1548,22 @@ export const PublicProfilePage = () => {
       label: button.label || button.title || 'Abrir enlace',
       url: button.url || button.href || null,
     }));
-  const floatingActionButtons = dedupeActions(
-    (resolvedFloatingButtons.length > 0 ? resolvedFloatingButtons : fallbackFloatingButtons)
-  ).slice(0, 3);
-  const quickActions = dedupeActions(
-    floatingActionButtons.length > 0 ? [...floatingActionButtons, ...profileActions] : profileActions
+  const resolvedByType = new Map(
+    resolvedFloatingButtons
+      .filter((button) => button?.type)
+      .map((button) => [button.type, button])
   );
+  const fallbackByType = new Map(
+    fallbackFloatingButtons
+      .filter((button) => button?.type)
+      .map((button) => [button.type, button])
+  );
+  const selectedButtonActions = selectedFloatingButtons.map((buttonType) => (
+    resolvedByType.get(buttonType)
+    || fallbackByType.get(buttonType)
+    || { type: buttonType, label: 'Acción', url: `action://requires-config/${buttonType}` }
+  ));
+  const floatingActionButtons = dedupeActions(selectedButtonActions).slice(0, 3);
   const renderActionIcon = (actionType) => {
     if (actionType === 'google_review') return <Star className="mr-2 h-4 w-4" />;
     if (actionType === 'rate_restaurant') return <Star className="mr-2 h-4 w-4" />;
@@ -1363,8 +1590,12 @@ export const PublicProfilePage = () => {
   };
 
   const handleActionClick = async (action) => {
-    if (action?.type === 'location') {
+    if (action?.type === 'location' || action?.type === 'send_location') {
       handleSendLocation();
+      return;
+    }
+    if (typeof action?.url === 'string' && action.url.startsWith('action://')) {
+      toast.info('Completa los datos del perfil para habilitar este botón.');
       return;
     }
     try {
@@ -1434,13 +1665,19 @@ export const PublicProfilePage = () => {
   const pageBgClass = profile.profile_type === 'business'
     ? `bg-gradient-to-b from-background via-background to-muted/30 ${theme.bg}`
     : theme.bg;
-  const hasMobileFloatingActions = floatingActionButtons.length > 0;
+  const hasFloatingActions = showFloatingActionsByTemplate && floatingActionButtons.length > 0;
+  const showTopProfilePhoto = topProfilePhotoEnabled && Boolean(topProfilePhotoUrl);
+  const showLegacyHeaderAvatar = !showTopProfilePhoto;
 
   return (
-    <div className={`min-h-screen ${pageBgClass} p-4 ${hasMobileFloatingActions ? 'pb-28' : ''}`} data-testid="public-profile-page">
-      <div className="max-w-md mx-auto pt-4">
-        <Card className="mb-4 overflow-hidden">
-          {profile.profile_type === 'business' && businessBannerUrl && (
+    <div
+      className={`min-h-screen ${pageBgClass} px-2 pb-4 pt-3 sm:px-4 ${hasFloatingActions ? 'pb-28' : ''}`}
+      style={pageThemeStyle}
+      data-testid="public-profile-page"
+    >
+      <div className="mx-auto w-full max-w-[560px]">
+        <Card className="mb-4 overflow-hidden border border-border/70" style={publicCardStyle}>
+          {profile.profile_type === 'business' && showBusinessBanner && businessBannerUrl && (
             <div className="relative h-36 w-full border-b border-border/60">
               <img
                 src={businessBannerUrl}
@@ -1450,8 +1687,8 @@ export const PublicProfilePage = () => {
               <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent"></div>
             </div>
           )}
-          <CardHeader className="text-center pb-3">
-            {profile.profile_type === 'business' && businessLogoUrl ? (
+          <CardHeader className="text-center pb-3" style={cardHeaderStyle}>
+            {showLegacyHeaderAvatar && profile.profile_type === 'business' && businessLogoUrl ? (
               <div className="mx-auto -mt-12 mb-2">
                 <img
                   src={businessLogoUrl}
@@ -1459,65 +1696,75 @@ export const PublicProfilePage = () => {
                   className="w-20 h-20 rounded-full object-cover border-4 border-background shadow-lg bg-background"
                 />
               </div>
-            ) : (
-              <div className={`mx-auto w-12 h-12 rounded-full flex items-center justify-center mb-2 ${theme.bg} border ${theme.border}`}>
-                <ProfileIcon className={`h-6 w-6 ${theme.accent}`} />
+            ) : showLegacyHeaderAvatar ? (
+              <div
+                className={`mx-auto w-12 h-12 rounded-full flex items-center justify-center mb-2 ${theme.bg} border ${theme.border}`}
+                style={templateIconWrapperStyle}
+              >
+                <ProfileIcon className={`h-6 w-6 ${theme.accent}`} style={templateIconStyle} />
               </div>
-            )}
-            {profile.profile_type === 'business' && (
-              <Badge variant="secondary" className="mx-auto mb-2">
-                {BUSINESS_TYPE_LABELS[profile.sub_type] || 'Perfil Empresa'}
+            ) : null}
+            {showProfileTypeBadge && (
+              <Badge
+                variant="secondary"
+                className="mx-auto mb-2 border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide"
+                style={cardPrimaryColor ? { borderColor: withAlpha(cardPrimaryColor, 0.35), color: cardPrimaryColor } : undefined}
+              >
+                {profileTypeLabel}
               </Badge>
             )}
-            <CardTitle className="font-heading text-2xl" data-testid="profile-name">
-              {publicProfileTitle}
+            <CardTitle
+              className={`font-heading ${titleIsTypeFallback ? 'text-xl' : 'text-2xl'}`}
+              data-testid="profile-name"
+            >
+              {displayProfileTitle}
             </CardTitle>
+            {showTopProfilePhoto && (
+              <div className="mx-auto mt-3">
+                <img
+                  src={topProfilePhotoUrl}
+                  alt="Foto principal del perfil"
+                  className={`h-24 w-24 object-cover border-2 border-background shadow-lg ${topProfilePhotoShapeClass}`}
+                />
+              </div>
+            )}
             {profile.profile_type === 'business' && businessSubtitle && (
-              <p className="text-sm text-muted-foreground mt-1">{businessSubtitle}</p>
+              <p className="text-sm text-muted-foreground mt-2">{businessSubtitle}</p>
+            )}
+            {headerHighlights.length > 0 && (
+              <div className="mt-3 flex flex-wrap justify-center gap-1.5">
+                {headerHighlights.map((item, index) => (
+                  <Badge key={`${item}-${index}`} variant="outline" className="max-w-full text-[11px] font-normal">
+                    <span className="truncate">{item}</span>
+                  </Badge>
+                ))}
+              </div>
             )}
           </CardHeader>
-          <CardContent>
+          <CardContent className="px-3 pb-4 pt-0 sm:px-4">
             {renderer()}
           </CardContent>
         </Card>
 
-        {profile.profile_type === 'personal' && (
+        {profile.profile_type === 'personal' && showManualLocationButtonByTemplate && (
           <Button
             className="w-full mb-4"
             size="lg"
             onClick={() => handleSendLocation()}
             disabled={sending}
             data-testid="send-location-btn"
+            style={floatingPrimaryStyle}
           >
             <MapPin className="mr-2 h-5 w-5" />
             {sending ? 'Enviando...' : 'Enviar Mi Ubicación'}
           </Button>
         )}
 
-        {quickActions.length > 0 && (
-          <Card className="mb-4">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Acciones Rápidas</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {quickActions.map((action, index) => (
-                <Button
-                  type="button"
-                  key={`${action.type || 'action'}-${index}`}
-                  variant={profile.profile_type === 'business' ? 'default' : 'outline'}
-                  className={`w-full ${profile.profile_type === 'business' ? 'justify-start text-left' : ''}`}
-                  onClick={() => handleActionClick(action)}
-                >
-                  {renderActionIcon(action.type)}
-                  {action.label || 'Abrir Enlace'}
-                </Button>
-              ))}
-            </CardContent>
-          </Card>
-        )}
-
-        {leadFormConfig.enabled && (
-          <Card className={`mb-4 ${profile.profile_type === 'business' ? `${theme.border} border` : ''}`}>
+        {leadFormConfig.enabled && showLeadFormByTemplate && (
+          <Card
+            className={`mb-4 ${profile.profile_type === 'business' ? `${theme.border} border` : ''}`}
+            style={publicCardStyle}
+          >
             <CardHeader className="pb-3">
               <CardTitle className="text-base">{leadFormConfig.title || 'Solicitar Contacto'}</CardTitle>
               {profile.profile_type === 'business' && (
@@ -1592,22 +1839,26 @@ export const PublicProfilePage = () => {
           </Card>
         )}
 
-        {hasMobileFloatingActions && (
-          <div className="fixed inset-x-4 bottom-4 z-40 sm:hidden">
-            <div className={`grid gap-2 rounded-2xl border border-border/70 bg-background/95 p-2 shadow-2xl backdrop-blur ${
+        {hasFloatingActions && (
+          <div className="fixed inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] z-[60] md:inset-x-6">
+            <div
+              className={`grid gap-2 rounded-2xl border border-border/70 bg-background/95 p-2 shadow-2xl backdrop-blur supports-[backdrop-filter]:bg-background/85 ${
               floatingActionButtons.length === 1
                 ? 'grid-cols-1'
                 : floatingActionButtons.length === 2
                   ? 'grid-cols-2'
                   : 'grid-cols-3'
-            }`}>
+            }`}
+              style={floatingPanelStyle}
+            >
               {floatingActionButtons.map((action, index) => (
                 <Button
                   type="button"
                   key={`${action.type || 'floating'}-${index}`}
-                  className="h-11 px-3"
-                  variant={action.type === 'location' ? 'default' : 'outline'}
+                  className="h-12 px-3 rounded-xl text-xs font-semibold sm:text-sm"
+                  variant={action.type === 'location' || action.type === 'send_location' ? 'default' : 'outline'}
                   onClick={() => handleActionClick(action)}
+                  style={(action.type === 'location' || action.type === 'send_location') ? floatingPrimaryStyle : floatingOutlineStyle}
                 >
                   {renderActionIcon(action.type)}
                   <span className="truncate">{action.label || 'Abrir'}</span>

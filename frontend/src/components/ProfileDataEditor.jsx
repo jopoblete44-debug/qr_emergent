@@ -13,6 +13,8 @@ import { Globe, MapPin, MessageSquare, Phone, Star } from 'lucide-react';
 const MAX_FLOATING_BUTTONS = 3;
 const DEFAULT_PUBLIC_SETTINGS = {
   request_location_automatically: false,
+  top_profile_photo_enabled: false,
+  top_profile_photo_shape: 'circle',
   floating_buttons: [],
 };
 const PROFILE_FLOATING_BUTTON_OPTIONS = {
@@ -59,6 +61,13 @@ const normalizeFloatingButtonType = (buttonType, profileType) => {
 
   return allowedTypes.has(mappedType) ? mappedType : null;
 };
+const extractFloatingButtonType = (button) => {
+  if (typeof button === 'string') return button;
+  if (button && typeof button === 'object') {
+    return button.type || button.key || button.value || button.button_type || '';
+  }
+  return '';
+};
 
 const normalizePublicSettings = (value, profileType) => {
   const raw = value && typeof value === 'object' ? value : {};
@@ -69,6 +78,7 @@ const normalizePublicSettings = (value, profileType) => {
       : [];
   const floatingButtons = Array.isArray(floatingButtonSource)
     ? floatingButtonSource
+      .map((item) => extractFloatingButtonType(item))
       .map((item) => String(item || '').trim())
       .filter(Boolean)
       .map((item) => normalizeFloatingButtonType(item, profileType))
@@ -80,6 +90,21 @@ const normalizePublicSettings = (value, profileType) => {
     request_location_automatically: Boolean(
       raw.request_location_automatically ?? raw.requestLocationAutomatically
     ),
+    top_profile_photo_enabled: Boolean(
+      raw.top_profile_photo_enabled
+      ?? raw.topProfilePhotoEnabled
+      ?? raw.profile_photo_enabled
+    ),
+    top_profile_photo_shape: (() => {
+      const shape = String(
+        raw.top_profile_photo_shape
+        ?? raw.topProfilePhotoShape
+        ?? raw.profile_photo_shape
+        ?? 'circle'
+      ).trim().toLowerCase();
+      if (shape === 'rounded' || shape === 'square') return shape;
+      return 'circle';
+    })(),
     floating_buttons: floatingButtons,
   };
 };
@@ -93,11 +118,26 @@ export const ProfileDataEditor = ({
   onPublicSettingsChange,
   notificationConfig = undefined,
   onNotificationConfigChange,
+  profileTypesConfig: providedProfileTypesConfig = null,
 }) => {
-  const [profileTypesConfig, setProfileTypesConfig] = useState(null);
+  const [profileTypesConfig, setProfileTypesConfig] = useState(
+    providedProfileTypesConfig && typeof providedProfileTypesConfig === 'object'
+      ? providedProfileTypesConfig
+      : null
+  );
   const [uploadingField, setUploadingField] = useState(null);
 
   useEffect(() => {
+    if (providedProfileTypesConfig && typeof providedProfileTypesConfig === 'object') {
+      setProfileTypesConfig(providedProfileTypesConfig);
+    }
+  }, [providedProfileTypesConfig]);
+
+  useEffect(() => {
+    if (providedProfileTypesConfig && typeof providedProfileTypesConfig === 'object') {
+      return undefined;
+    }
+
     let isMounted = true;
 
     const loadProfileTypesConfig = async () => {
@@ -113,7 +153,7 @@ export const ProfileDataEditor = ({
 
     loadProfileTypesConfig();
     return () => { isMounted = false; };
-  }, []);
+  }, [providedProfileTypesConfig]);
 
   const handleChange = (field, value) => {
     onChange({ ...data, [field]: value });
@@ -213,9 +253,6 @@ export const ProfileDataEditor = ({
           capture="environment"
           onChange={(e) => handleUploadImage(fieldKey, e.target.files?.[0], onValueChange)}
         />
-        <p className="text-xs text-muted-foreground">
-          Solo se permiten imágenes subidas desde tu dispositivo.
-        </p>
         {uploadingField === fieldKey && (
           <p className="text-xs text-muted-foreground">Subiendo imagen...</p>
         )}
@@ -239,9 +276,54 @@ export const ProfileDataEditor = ({
     <div className="space-y-4 rounded-xl border border-border/70 bg-muted/20 p-4">
       <div className="space-y-1">
         <h4 className="text-sm font-semibold text-foreground">Configuración pública del QR</h4>
-        <p className="text-xs text-muted-foreground">
-          Definí comportamiento de ubicación y hasta {MAX_FLOATING_BUTTONS} botones flotantes para la vista pública.
-        </p>
+      </div>
+
+      <div className="space-y-3 rounded-lg border border-border/60 bg-background px-3 py-3">
+        <div className="flex items-start justify-between gap-4">
+          <div className="space-y-1">
+            <Label htmlFor="top-profile-photo-enabled" className="text-sm font-medium">
+              Foto superior destacada
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              Se muestra debajo del nombre del perfil en la vista pública.
+            </p>
+          </div>
+          <Switch
+            id="top-profile-photo-enabled"
+            checked={normalizedPublicSettings.top_profile_photo_enabled}
+            onCheckedChange={(checked) => handlePublicSettingsUpdate({ top_profile_photo_enabled: checked })}
+          />
+        </div>
+
+        {normalizedPublicSettings.top_profile_photo_enabled && (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Forma del recorte</Label>
+              <Select
+                value={normalizedPublicSettings.top_profile_photo_shape}
+                onValueChange={(value) => handlePublicSettingsUpdate({ top_profile_photo_shape: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="circle">Circular (por defecto)</SelectItem>
+                  <SelectItem value="rounded">Redondeado</SelectItem>
+                  <SelectItem value="square">Cuadrado</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              {renderImageField({
+                fieldKey: 'top_profile_photo_url',
+                label: 'Imagen destacada',
+                value: data.top_profile_photo_url || '',
+                onValueChange: (value) => handleChange('top_profile_photo_url', value),
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="flex items-start justify-between gap-4 rounded-lg border border-border/60 bg-background px-3 py-3">

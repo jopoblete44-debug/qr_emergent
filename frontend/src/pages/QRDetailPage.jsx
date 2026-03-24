@@ -130,6 +130,7 @@ export const QRDetailPage = () => {
   const { profile, total_scans, recent_scans, daily_data } = data;
   const statusVariants = { subscription: 'default', indefinite: 'secondary', paused: 'destructive' };
   const statusLabels = { subscription: 'Suscripción', indefinite: 'Indefinido', paused: 'Pausado' };
+  const internalAlias = String(profile.alias || profile.name || '').trim() || `qr-${profile.hash?.slice(0, 6) || profile.id}`;
 
   return (
     <ProtectedRoute>
@@ -148,10 +149,8 @@ export const QRDetailPage = () => {
             <div className="flex-1">
               <div className="flex items-start justify-between mb-4">
                 <div>
-                  <h1 className="font-heading font-bold text-3xl" data-testid="qr-detail-name">{profile.name}</h1>
-                  {profile.alias && profile.alias !== profile.name && (
-                    <p className="text-muted-foreground mt-1">{profile.alias}</p>
-                  )}
+                  <h1 className="font-heading font-bold text-3xl" data-testid="qr-detail-name">{internalAlias}</h1>
+                  <p className="text-muted-foreground mt-1">Alias interno del QR</p>
                 </div>
                 <Badge variant={statusVariants[profile.status]} className="text-sm">
                   {statusLabels[profile.status]}
