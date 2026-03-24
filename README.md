@@ -166,8 +166,14 @@ React 19 + Vite (SPA) --> FastAPI (REST API) --> MongoDB
 ## Politica De Imagenes Y UX Frontend
 
 - Las vistas frontend de landing/tienda no usan imagenes remotas hardcodeadas como fallback.
-- Para campos visuales de imagen (foto, logo, portada, avatar, banner), la experiencia debe priorizar carga desde dispositivo sobre ingreso manual de URL.
+- Para campos visuales de imagen (foto, logo, portada, avatar, banner), la carga es **upload-only**: se prioriza subir desde dispositivo, no pegar URLs manuales.
+- El backend guarda esos archivos bajo `/uploads/<scope>/<owner>/...` y valida scope/owner antes de aceptar la referencia.
 - Las previews visuales del editor admin pueden usar placeholders locales/data URI para demostrar layout sin depender de terceros.
+
+## Rutas Publicas Y Navegacion
+
+- Public pages disponibles: `/about`, `/contact` y `/faq`.
+- El menu movil tambien expone el acceso publico, para navegar sin abrir el dashboard.
 
 ## Modulo Tienda (Admin)
 

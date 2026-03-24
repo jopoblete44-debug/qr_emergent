@@ -17,6 +17,20 @@ REACT_APP_BACKEND_URL=http://localhost:8001
 ```
 
 Tambien se soporta `VITE_BACKEND_URL` para compatibilidad con Vite.
+El footer lee tambien estas variables opcionales:
+
+```env
+VITE_SOCIAL_FACEBOOK_URL=
+VITE_SOCIAL_TWITTER_URL=
+VITE_SOCIAL_INSTAGRAM_URL=
+VITE_SOCIAL_LINKEDIN_URL=
+```
+
+## Notas Funcionales
+
+- Las rutas publicas incluyen `/about`, `/contact` y `/faq`.
+- La experiencia de imagenes prioriza carga desde dispositivo; no se documenta uso de URLs remotas como flujo principal.
+- El backend publica archivos en `/uploads` con scope y owner validados.
 
 ## Auditoria de Paquetes Deprecados
 

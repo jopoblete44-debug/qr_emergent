@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -14,6 +14,7 @@ import {
   Building, CreditCard, Camera, FileText, MessageSquare, Bell, AlertTriangle,
   Coffee, Utensils, Home, Car, Baby, Dog
 } from 'lucide-react';
+import { getEffectiveFieldType, isImageLikeField } from '../utils/imageFieldUtils';
 
 const FIELD_TYPES = [
   { value: 'text', label: 'Texto', icon: Type },
@@ -90,62 +91,120 @@ const DEFAULT_FIELD = () => ({
 
 export const ProfileTemplateEditor = ({ template, onChange }) => {
   const [expandedSection, setExpandedSection] = useState(null);
+  const sections = Array.isArray(template?.sections) ? template.sections : [];
+
+  const normalizeField = (field = {}) => {
+    const effectiveType = getEffectiveFieldType(field);
+    return field?.type === effectiveType ? field : { ...field, type: effectiveType };
+  };
+
+  const normalizeSections = (templateSections = []) => {
+    let hasChanges = false;
+
+    const normalizedSections = templateSections.map((section) => {
+      const fields = Array.isArray(section?.fields) ? section.fields : [];
+      let sectionChanged = false;
+
+      const normalizedFields = fields.map((field) => {
+        const normalizedField = normalizeField(field);
+        if (normalizedField !== field) {
+          sectionChanged = true;
+        }
+        return normalizedField;
+      });
+
+      if (!sectionChanged) return section;
+
+      hasChanges = true;
+      return { ...section, fields: normalizedFields };
+    });
+
+    return hasChanges ? normalizedSections : templateSections;
+  };
+
+  const normalizeTemplateFields = (nextTemplate) => {
+    if (!nextTemplate || !Array.isArray(nextTemplate.sections)) return nextTemplate;
+
+    const normalizedSections = normalizeSections(nextTemplate.sections);
+    if (normalizedSections === nextTemplate.sections) return nextTemplate;
+
+    return { ...nextTemplate, sections: normalizedSections };
+  };
+
+  const hasImageLikeTypeMismatch = (templateSections = []) => (
+    templateSections.some((section) => (
+      (section?.fields || []).some((field) => isImageLikeField(field) && field?.type !== 'image')
+    ))
+  );
+
+  useEffect(() => {
+    if (!hasImageLikeTypeMismatch(sections)) return;
+    onChange(normalizeTemplateFields(template));
+  }, [sections, template, onChange]);
 
   const updateTemplate = (updates) => {
-    onChange({ ...template, ...updates });
+    onChange(normalizeTemplateFields({ ...template, ...updates }));
   };
 
   const updateSection = (sectionIdx, updates) => {
-    const newSections = [...template.sections];
+    const newSections = [...sections];
     newSections[sectionIdx] = { ...newSections[sectionIdx], ...updates };
     updateTemplate({ sections: newSections });
   };
 
   const addSection = () => {
     const newSection = DEFAULT_SECTION();
-    updateTemplate({ sections: [...template.sections, newSection] });
-    setExpandedSection(template.sections.length);
+    updateTemplate({ sections: [...sections, newSection] });
+    setExpandedSection(sections.length);
   };
 
   const removeSection = (idx) => {
-    updateTemplate({ sections: template.sections.filter((_, i) => i !== idx) });
+    updateTemplate({ sections: sections.filter((_, i) => i !== idx) });
   };
 
   const moveSection = (idx, direction) => {
     const newIdx = idx + direction;
-    if (newIdx < 0 || newIdx >= template.sections.length) return;
-    const newSections = [...template.sections];
+    if (newIdx < 0 || newIdx >= sections.length) return;
+    const newSections = [...sections];
     [newSections[idx], newSections[newIdx]] = [newSections[newIdx], newSections[idx]];
     updateTemplate({ sections: newSections });
     setExpandedSection(newIdx);
   };
 
   const addField = (sectionIdx) => {
-    const newSections = [...template.sections];
-    newSections[sectionIdx].fields.push(DEFAULT_FIELD());
+    const newSections = [...sections];
+    const section = newSections[sectionIdx];
+    const fields = Array.isArray(section?.fields) ? section.fields : [];
+    newSections[sectionIdx] = { ...section, fields: [...fields, DEFAULT_FIELD()] };
     updateTemplate({ sections: newSections });
   };
 
   const updateField = (sectionIdx, fieldIdx, updates) => {
-    const newSections = [...template.sections];
-    newSections[sectionIdx].fields[fieldIdx] = {
-      ...newSections[sectionIdx].fields[fieldIdx],
+    const newSections = [...sections];
+    const section = newSections[sectionIdx];
+    const fields = Array.isArray(section?.fields) ? [...section.fields] : [];
+    fields[fieldIdx] = {
+      ...fields[fieldIdx],
       ...updates,
     };
+    newSections[sectionIdx] = { ...section, fields };
     updateTemplate({ sections: newSections });
   };
 
   const removeField = (sectionIdx, fieldIdx) => {
-    const newSections = [...template.sections];
-    newSections[sectionIdx].fields.splice(fieldIdx, 1);
+    const newSections = [...sections];
+    const section = newSections[sectionIdx];
+    const fields = Array.isArray(section?.fields) ? [...section.fields] : [];
+    fields.splice(fieldIdx, 1);
+    newSections[sectionIdx] = { ...section, fields };
     updateTemplate({ sections: newSections });
   };
 
   const moveField = (sectionIdx, fieldIdx, direction) => {
     const newIdx = fieldIdx + direction;
-    const fields = template.sections[sectionIdx].fields;
+    const fields = sections[sectionIdx].fields;
     if (newIdx < 0 || newIdx >= fields.length) return;
-    const newSections = [...template.sections];
+    const newSections = [...sections];
     const arr = [...newSections[sectionIdx].fields];
     [arr[fieldIdx], arr[newIdx]] = [arr[newIdx], arr[fieldIdx]];
     newSections[sectionIdx] = { ...newSections[sectionIdx], fields: arr };
@@ -262,7 +321,7 @@ export const ProfileTemplateEditor = ({ template, onChange }) => {
       </Card>
 
       {/* Sections */}
-      {template.sections.map((section, sIdx) => {
+      {sections.map((section, sIdx) => {
         const isExpanded = expandedSection === sIdx;
         const SectionIcon = getIconComponent(section.icon);
 
@@ -289,7 +348,7 @@ export const ProfileTemplateEditor = ({ template, onChange }) => {
                   <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={(e) => { e.stopPropagation(); moveSection(sIdx, -1); }} disabled={sIdx === 0}>
                     <ChevronUp className="h-3 w-3" />
                   </Button>
-                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={(e) => { e.stopPropagation(); moveSection(sIdx, 1); }} disabled={sIdx === template.sections.length - 1}>
+                  <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={(e) => { e.stopPropagation(); moveSection(sIdx, 1); }} disabled={sIdx === sections.length - 1}>
                     <ChevronDown className="h-3 w-3" />
                   </Button>
                   <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-destructive" onClick={(e) => { e.stopPropagation(); removeSection(sIdx); }}>
@@ -328,6 +387,11 @@ export const ProfileTemplateEditor = ({ template, onChange }) => {
                 {/* Fields */}
                 {section.fields.map((field, fIdx) => {
                   const FieldIcon = getIconComponent(field.icon);
+                  const fieldIsImageLike = isImageLikeField(field);
+                  const effectiveFieldType = getEffectiveFieldType(field);
+                  const availableFieldTypes = fieldIsImageLike
+                    ? FIELD_TYPES.filter((fieldType) => fieldType.value === 'image')
+                    : FIELD_TYPES;
                   return (
                     <div
                       key={field.id}
@@ -365,12 +429,16 @@ export const ProfileTemplateEditor = ({ template, onChange }) => {
 
                       {/* Field config row */}
                       <div className="flex items-center gap-2 pl-5">
-                        <Select value={field.type} onValueChange={(v) => updateField(sIdx, fIdx, { type: v })}>
+                        <Select
+                          value={effectiveFieldType}
+                          onValueChange={(v) => updateField(sIdx, fIdx, { type: fieldIsImageLike ? 'image' : v })}
+                          disabled={fieldIsImageLike}
+                        >
                           <SelectTrigger className="w-28 h-6 text-[10px]">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            {FIELD_TYPES.map(ft => (
+                            {availableFieldTypes.map(ft => (
                               <SelectItem key={ft.value} value={ft.value}>
                                 <span className="flex items-center gap-1 text-xs"><ft.icon className="h-3 w-3" />{ft.label}</span>
                               </SelectItem>
@@ -417,8 +485,13 @@ export const ProfileTemplateEditor = ({ template, onChange }) => {
                             className="h-6 text-[10px]"
                             placeholder="ej: menu_items, wifi_name"
                           />
+                          {fieldIsImageLike && (
+                            <p className="text-[10px] text-muted-foreground">
+                              Este nombre se detecta como imagen y queda forzado a tipo imagen.
+                            </p>
+                          )}
                         </div>
-                        {field.type === 'select' && (
+                        {effectiveFieldType === 'select' && (
                           <div className="space-y-1">
                             <Label className="text-[10px]">Opciones (una por línea)</Label>
                             <Textarea

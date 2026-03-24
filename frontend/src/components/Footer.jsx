@@ -3,6 +3,23 @@ import { Link } from 'react-router-dom';
 import { Facebook, Twitter, Instagram, Linkedin } from 'lucide-react';
 
 export const Footer = () => {
+  const socialLinks = [
+    { label: 'Facebook', href: import.meta.env.VITE_SOCIAL_FACEBOOK_URL, Icon: Facebook },
+    { label: 'Twitter/X', href: import.meta.env.VITE_SOCIAL_TWITTER_URL, Icon: Twitter },
+    { label: 'Instagram', href: import.meta.env.VITE_SOCIAL_INSTAGRAM_URL, Icon: Instagram },
+    { label: 'LinkedIn', href: import.meta.env.VITE_SOCIAL_LINKEDIN_URL, Icon: Linkedin },
+  ];
+
+  const companyLinks = [
+    { to: '/about', label: 'Sobre Nosotros' },
+    { to: '/contact', label: 'Contacto' },
+    { to: '/faq', label: 'Preguntas Frecuentes' },
+  ];
+
+  const isConfiguredExternalUrl = (value) => (
+    typeof value === 'string' && /^https?:\/\//i.test(value.trim())
+  );
+
   return (
     <footer className="bg-muted border-t border-border">
       <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -31,27 +48,50 @@ export const Footer = () => {
           <div>
             <h3 className="font-semibold mb-4">Empresa</h3>
             <ul className="space-y-2 text-sm text-muted-foreground">
-              <li><Link to="/about" className="hover:text-primary transition-colors">Sobre Nosotros</Link></li>
-              <li><Link to="/contact" className="hover:text-primary transition-colors">Contacto</Link></li>
-              <li><Link to="/faq" className="hover:text-primary transition-colors">Preguntas Frecuentes</Link></li>
+              {companyLinks.map((link) => (
+                <li key={link.to}>
+                  <Link to={link.to} className="hover:text-primary transition-colors">
+                    {link.label}
+                  </Link>
+                </li>
+              ))}
             </ul>
           </div>
 
           <div>
             <h3 className="font-semibold mb-4">Síguenos</h3>
             <div className="flex space-x-4">
-              <a href="#" className="text-muted-foreground hover:text-primary transition-colors">
-                <Facebook className="h-5 w-5" />
-              </a>
-              <a href="#" className="text-muted-foreground hover:text-primary transition-colors">
-                <Twitter className="h-5 w-5" />
-              </a>
-              <a href="#" className="text-muted-foreground hover:text-primary transition-colors">
-                <Instagram className="h-5 w-5" />
-              </a>
-              <a href="#" className="text-muted-foreground hover:text-primary transition-colors">
-                <Linkedin className="h-5 w-5" />
-              </a>
+              {socialLinks.map(({ label, href, Icon }) => {
+                const isConfigured = isConfiguredExternalUrl(href);
+                const sharedClassName = 'text-muted-foreground transition-colors';
+
+                if (isConfigured) {
+                  return (
+                    <a
+                      key={label}
+                      href={href.trim()}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={label}
+                      className={`${sharedClassName} hover:text-primary`}
+                    >
+                      <Icon className="h-5 w-5" />
+                    </a>
+                  );
+                }
+
+                return (
+                  <span
+                    key={label}
+                    aria-label={`${label} no disponible`}
+                    title={`${label} no disponible`}
+                    className={`${sharedClassName} opacity-50 cursor-not-allowed`}
+                  >
+                    <Icon className="h-5 w-5" />
+                    <span className="sr-only">{label} no disponible</span>
+                  </span>
+                );
+              })}
             </div>
           </div>
         </div>

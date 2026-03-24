@@ -67,6 +67,24 @@ IMAGE_SETTING_KEYS = {
     'seo_og_image_url',
     'store_home_banner_url',
 }
+UPLOAD_ALLOWED_FILE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
+UPLOAD_OWNER_SEGMENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+UPLOAD_FILE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
+PROFILE_IMAGE_INPUT_SCOPES = {'profiles', 'general'}
+ADMIN_PROFILE_IMAGE_INPUT_SCOPES = {'profiles', 'general'}
+PRODUCT_IMAGE_INPUT_SCOPES = {'store-products', 'general'}
+SETTINGS_IMAGE_ALLOWED_SCOPES: Dict[str, Set[str]] = {
+    'brand_logo_url': {'brand', 'general'},
+    'favicon_url': {'brand', 'general'},
+    'seo_og_image_url': {'seo', 'general'},
+    'store_home_banner_url': {'store', 'general'},
+}
+UPLOAD_GENERIC_ALLOWED_SCOPES = set().union(
+    PROFILE_IMAGE_INPUT_SCOPES,
+    ADMIN_PROFILE_IMAGE_INPUT_SCOPES,
+    PRODUCT_IMAGE_INPUT_SCOPES,
+    *SETTINGS_IMAGE_ALLOWED_SCOPES.values(),
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -2352,6 +2370,32 @@ def normalize_upload_scope(scope: Optional[str]) -> str:
     normalized = re.sub(r"[^a-z0-9_\-]", "", raw_scope)
     return normalized or 'general'
 
+def normalize_optional_user_id(value: Any) -> Optional[str]:
+    normalized = str(value or '').strip()
+    return normalized or None
+
+def parse_normalized_local_upload_path(local_path: str) -> Optional[Tuple[str, str, str]]:
+    normalized = str(local_path or '').strip()
+    if not normalized.startswith('/uploads/'):
+        return None
+    relative = normalized[len('/uploads/'):]
+    segments = [segment for segment in relative.split('/') if segment]
+    if len(segments) != 3:
+        return None
+
+    scope, owner_segment, file_name = segments
+    if scope != normalize_upload_scope(scope):
+        return None
+    if not UPLOAD_OWNER_SEGMENT_PATTERN.fullmatch(owner_segment):
+        return None
+    if not UPLOAD_FILE_NAME_PATTERN.fullmatch(file_name):
+        return None
+    if Path(file_name).name != file_name:
+        return None
+    if Path(file_name).suffix.lower() not in UPLOAD_ALLOWED_FILE_EXTENSIONS:
+        return None
+    return scope, owner_segment, file_name
+
 def normalize_local_upload_path(value: str) -> Optional[str]:
     trimmed = str(value or '').strip()
     if not trimmed:
@@ -2367,22 +2411,49 @@ def normalize_local_upload_path(value: str) -> Optional[str]:
     segments = [segment for segment in relative.split('/') if segment]
     if not segments or any(segment in {'.', '..'} for segment in segments):
         return None
-    return f"/uploads/{'/'.join(segments)}"
+    normalized = f"/uploads/{'/'.join(segments)}"
+    parts = parse_normalized_local_upload_path(normalized)
+    if not parts:
+        return None
+    scope, owner_segment, file_name = parts
+    return f"/uploads/{scope}/{owner_segment}/{file_name}"
 
-def normalize_uploaded_image_reference(value: Any, request: Optional[Request] = None) -> Optional[str]:
+def resolve_uploaded_image_reference(value: Any, request: Optional[Request] = None) -> Tuple[Optional[str], str]:
     if value is None:
-        return None
+        return None, 'empty'
     if not isinstance(value, str):
-        return None
+        return None, 'invalid_type'
+
     trimmed = value.strip()
     if not trimmed:
-        return ''
+        return '', 'empty_string'
+
     local_path = normalize_local_upload_path(trimmed)
     if local_path is not None:
-        return local_path
+        return local_path, 'ok'
+
     parsed = urlparse(trimmed)
-    if parsed.scheme in {'http', 'https'} and parsed.netloc.lower() in get_allowed_upload_hosts(request):
-        return normalize_local_upload_path(parsed.path or '')
+    if parsed.scheme in {'http', 'https'}:
+        if parsed.netloc.lower() not in get_allowed_upload_hosts(request):
+            return None, 'external_url'
+        normalized_path = normalize_local_upload_path(parsed.path or '')
+        if normalized_path is None:
+            return None, 'invalid_path'
+        return normalized_path, 'ok'
+    if parsed.scheme or parsed.netloc:
+        return None, 'external_url'
+
+    if trimmed.startswith('/uploads/') or trimmed.startswith('uploads/'):
+        return None, 'invalid_path'
+
+    return None, 'invalid_reference'
+
+def normalize_uploaded_image_reference(value: Any, request: Optional[Request] = None) -> Optional[str]:
+    normalized, reason = resolve_uploaded_image_reference(value, request=request)
+    if reason == 'ok':
+        return normalized
+    if reason == 'empty_string':
+        return ''
     return None
 
 def is_uploaded_image_reference(value: Any, request: Optional[Request] = None) -> bool:
@@ -2408,13 +2479,66 @@ def enforce_uploaded_image_reference(value: Any, field_label: str, request: Opti
             status_code=400,
             detail=f'La imagen de "{field_label}" debe enviarse como referencia local de /uploads'
         )
-    normalized = normalize_uploaded_image_reference(value, request=request)
-    if normalized is None:
+    normalized, reason = resolve_uploaded_image_reference(value, request=request)
+    if reason == 'external_url':
         raise HTTPException(
             status_code=400,
             detail=f'La imagen de "{field_label}" debe provenir de un upload local de la app. No se aceptan URLs externas.'
         )
+    if normalized is None:
+        if reason == 'invalid_path':
+            raise HTTPException(
+                status_code=400,
+                detail=f'La imagen de "{field_label}" debe usar una ruta válida con formato /uploads/<scope>/<owner>/<archivo>.'
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=f'La imagen de "{field_label}" debe enviarse como referencia local de /uploads'
+        )
     return normalized
+
+def enforce_uploaded_image_reference_policy(
+    normalized_path: Optional[str],
+    field_label: str,
+    *,
+    allowed_scopes: Optional[Set[str]] = None,
+    owner_user_id: Optional[str] = None
+) -> Optional[str]:
+    if normalized_path in {None, ''}:
+        return normalized_path
+
+    parts = parse_normalized_local_upload_path(str(normalized_path))
+    if not parts:
+        raise HTTPException(
+            status_code=400,
+            detail=f'La imagen de "{field_label}" debe usar una ruta válida con formato /uploads/<scope>/<owner>/<archivo>.'
+        )
+
+    scope, owner_segment, file_name = parts
+
+    if allowed_scopes:
+        normalized_scopes = {
+            normalize_upload_scope(scope_name)
+            for scope_name in allowed_scopes
+            if normalize_upload_scope(scope_name)
+        }
+        if scope not in normalized_scopes:
+            allowed_scope_examples = ', '.join(
+                f'/uploads/{allowed_scope}/<owner>/{file_name}'
+                for allowed_scope in sorted(normalized_scopes)
+            )
+            raise HTTPException(
+                status_code=400,
+                detail=f'La imagen de "{field_label}" usa el scope "{scope}", pero para este campo solo se aceptan {allowed_scope_examples}.'
+            )
+
+    if owner_user_id is not None and owner_segment != str(owner_user_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f'La imagen de "{field_label}" debe pertenecer al usuario dueño del perfil y usar /uploads/<scope>/{owner_user_id}/<archivo>.'
+        )
+
+    return normalized_path
 
 def collect_template_image_field_names(node: Any, output: Set[str]) -> None:
     if isinstance(node, dict):
@@ -2451,7 +2575,9 @@ def process_uploaded_image_field_value(
     field_label: str,
     *,
     request: Optional[Request] = None,
-    strict: bool = True
+    strict: bool = True,
+    allowed_scopes: Optional[Set[str]] = None,
+    owner_user_id: Optional[str] = None
 ) -> Any:
     if isinstance(value, list):
         return [
@@ -2460,11 +2586,19 @@ def process_uploaded_image_field_value(
                 f'{field_label}[{index}]',
                 request=request,
                 strict=strict,
+                allowed_scopes=allowed_scopes,
+                owner_user_id=owner_user_id,
             )
             for index, item in enumerate(value)
         ]
     if strict:
-        return enforce_uploaded_image_reference(value, field_label, request=request)
+        normalized = enforce_uploaded_image_reference(value, field_label, request=request)
+        return enforce_uploaded_image_reference_policy(
+            normalized,
+            field_label,
+            allowed_scopes=allowed_scopes,
+            owner_user_id=owner_user_id,
+        )
     return sanitize_uploaded_image_reference_for_output(value, request=request)
 
 def should_treat_as_image_field(key: Any, explicit_image_fields: Optional[Set[str]] = None) -> bool:
@@ -2479,7 +2613,9 @@ def enforce_uploaded_images_in_data(
     *,
     explicit_image_fields: Optional[Set[str]] = None,
     request: Optional[Request] = None,
-    strict: bool = True
+    strict: bool = True,
+    allowed_scopes: Optional[Set[str]] = None,
+    owner_user_id: Optional[str] = None
 ) -> Any:
     if isinstance(data, dict):
         normalized: Dict[str, Any] = {}
@@ -2491,6 +2627,8 @@ def enforce_uploaded_images_in_data(
                     next_path,
                     request=request,
                     strict=strict,
+                    allowed_scopes=allowed_scopes,
+                    owner_user_id=owner_user_id,
                 )
             else:
                 normalized[key] = enforce_uploaded_images_in_data(
@@ -2499,6 +2637,8 @@ def enforce_uploaded_images_in_data(
                     explicit_image_fields=explicit_image_fields,
                     request=request,
                     strict=strict,
+                    allowed_scopes=allowed_scopes,
+                    owner_user_id=owner_user_id,
                 )
         return normalized
     if isinstance(data, list):
@@ -2509,6 +2649,8 @@ def enforce_uploaded_images_in_data(
                 explicit_image_fields=explicit_image_fields,
                 request=request,
                 strict=strict,
+                allowed_scopes=allowed_scopes,
+                owner_user_id=owner_user_id,
             )
             for idx, item in enumerate(data)
         ]
@@ -2521,7 +2663,9 @@ async def enforce_profile_uploaded_images_in_data(
     sub_type: Optional[str],
     request: Optional[Request] = None,
     path: str = 'data',
-    image_field_cache: Optional[Dict[Tuple[str, str], Set[str]]] = None
+    image_field_cache: Optional[Dict[Tuple[str, str], Set[str]]] = None,
+    allowed_scopes: Optional[Set[str]] = None,
+    owner_user_id: Optional[str] = None
 ) -> Any:
     explicit_image_fields = await get_profile_image_field_names(profile_type, sub_type, cache=image_field_cache)
     return enforce_uploaded_images_in_data(
@@ -2530,6 +2674,8 @@ async def enforce_profile_uploaded_images_in_data(
         explicit_image_fields=explicit_image_fields,
         request=request,
         strict=True,
+        allowed_scopes=allowed_scopes,
+        owner_user_id=owner_user_id,
     )
 
 async def sanitize_profile_document(
@@ -2555,6 +2701,38 @@ async def sanitize_profile_document(
         )
     return sanitize_for_json(normalized)
 
+async def validate_profile_upload_ownership(
+    profile: Dict[str, Any],
+    *,
+    owner_user_id: Optional[str],
+    request: Optional[Request] = None,
+    image_field_cache: Optional[Dict[Tuple[str, str], Set[str]]] = None,
+    allowed_scopes: Optional[Set[str]] = None,
+) -> None:
+    normalized_owner_user_id = normalize_optional_user_id(owner_user_id)
+    if not normalized_owner_user_id:
+        return
+
+    sanitized_profile = await sanitize_profile_document(
+        profile,
+        request=request,
+        image_field_cache=image_field_cache,
+    )
+    sanitized_data = sanitized_profile.get('data')
+    if not isinstance(sanitized_data, (dict, list)):
+        return
+
+    await enforce_profile_uploaded_images_in_data(
+        sanitized_data,
+        profile_type=profile.get('profile_type'),
+        sub_type=profile.get('sub_type'),
+        request=request,
+        path='data',
+        image_field_cache=image_field_cache,
+        allowed_scopes=allowed_scopes,
+        owner_user_id=normalized_owner_user_id,
+    )
+
 async def sanitize_profile_collection(
     profiles: List[Dict[str, Any]],
     *,
@@ -2570,12 +2748,18 @@ def sanitize_product_image_field(
     product_data: Dict[str, Any],
     *,
     request: Optional[Request] = None,
-    strict: bool = True
+    strict: bool = True,
+    allowed_scopes: Optional[Set[str]] = None
 ) -> Dict[str, Any]:
     if 'image_url' not in product_data:
         return product_data
     if strict:
-        product_data['image_url'] = enforce_uploaded_image_reference(product_data.get('image_url'), 'image_url', request=request)
+        normalized = enforce_uploaded_image_reference(product_data.get('image_url'), 'image_url', request=request)
+        product_data['image_url'] = enforce_uploaded_image_reference_policy(
+            normalized,
+            'image_url',
+            allowed_scopes=allowed_scopes,
+        )
     else:
         product_data['image_url'] = sanitize_uploaded_image_reference_for_output(product_data.get('image_url'), request=request)
     return product_data
@@ -2584,12 +2768,18 @@ def sanitize_settings_image_fields(
     settings_data: Dict[str, Any],
     *,
     request: Optional[Request] = None,
-    strict: bool = True
+    strict: bool = True,
+    allowed_scope_by_field: Optional[Dict[str, Set[str]]] = None
 ) -> Dict[str, Any]:
     for key in IMAGE_SETTING_KEYS:
         if key in settings_data:
             if strict:
-                settings_data[key] = enforce_uploaded_image_reference(settings_data.get(key), key, request=request)
+                normalized = enforce_uploaded_image_reference(settings_data.get(key), key, request=request)
+                settings_data[key] = enforce_uploaded_image_reference_policy(
+                    normalized,
+                    key,
+                    allowed_scopes=allowed_scope_by_field.get(key) if allowed_scope_by_field else None,
+                )
             else:
                 settings_data[key] = sanitize_uploaded_image_reference_for_output(settings_data.get(key), request=request)
     return settings_data
@@ -2606,7 +2796,7 @@ def save_uploaded_image(
     if len(content) > 8 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="La imagen supera el máximo de 8MB")
 
-    allowed_exts = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
+    allowed_exts = UPLOAD_ALLOWED_FILE_EXTENSIONS
     ext_from_name = Path(file_name or '').suffix.lower()
     ext = ext_from_name if ext_from_name in allowed_exts else None
     if not ext:
@@ -3460,6 +3650,13 @@ async def upload_generic_image(
     scope: str = 'general'
 ):
     user = await get_current_user(request)
+    normalized_scope = normalize_upload_scope(scope)
+    if normalized_scope not in UPLOAD_GENERIC_ALLOWED_SCOPES:
+        allowed_scopes = ', '.join(sorted(UPLOAD_GENERIC_ALLOWED_SCOPES))
+        raise HTTPException(
+            status_code=400,
+            detail=f'Scope de upload no permitido. Usá uno de: {allowed_scopes}.'
+        )
     if not file.content_type or not file.content_type.startswith('image/'):
         raise HTTPException(status_code=400, detail="El archivo debe ser una imagen")
     content = await file.read()
@@ -3468,7 +3665,7 @@ async def upload_generic_image(
         file_name=file.filename or '',
         content_type=file.content_type,
         user_id=str(user['id']),
-        scope=scope,
+        scope=normalized_scope,
         request=request,
     )
     return {'url': public_url}
@@ -3558,6 +3755,8 @@ async def create_qr_profile(profile_data: QRProfileCreate, request: Request):
         request=request,
         path='data',
         image_field_cache=image_field_cache,
+        allowed_scopes=PROFILE_IMAGE_INPUT_SCOPES,
+        owner_user_id=str(user['id']),
     )
     profile_status = 'subscription' if quota_consumed else profile_data.status
     if quota_consumed and consumed_bucket_id and quota_owner_user_id:
@@ -3639,6 +3838,8 @@ async def update_qr_profile(profile_id: str, profile_data: QRProfileUpdate, requ
             sub_type=update_data.get('sub_type', existing.get('sub_type')),
             request=request,
             path='data',
+            allowed_scopes=PROFILE_IMAGE_INPUT_SCOPES,
+            owner_user_id=str(existing.get('user_id') or user['id']),
         )
     update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
     
@@ -4710,6 +4911,8 @@ async def admin_create_qr_profile(profile_data: AdminQRProfileCreate, request: R
             sub_type=profile_data.sub_type,
             request=request,
             path='data',
+            allowed_scopes=ADMIN_PROFILE_IMAGE_INPUT_SCOPES,
+            owner_user_id=str(profile_data.user_id),
         ),
         'notification_config': profile_data.notification_config,
         'expiration_date': profile_data.expiration_date,
@@ -4773,9 +4976,17 @@ async def get_all_profiles(
 async def admin_update_profile(profile_id: str, profile_data: Dict[str, Any], request: Request):
     admin = await get_current_admin(request)
     
-    existing = await db.qr_profiles.find_one({'id': profile_id}, {'_id': 0, 'profile_type': 1, 'sub_type': 1})
+    existing = await db.qr_profiles.find_one({'id': profile_id}, {'_id': 0, 'profile_type': 1, 'sub_type': 1, 'user_id': 1})
     if not existing:
         raise HTTPException(status_code=404, detail="Profile not found")
+
+    requested_user_id = normalize_optional_user_id(profile_data.get('user_id'))
+    current_owner_user_id = normalize_optional_user_id(existing.get('user_id'))
+    if requested_user_id and requested_user_id != current_owner_user_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Para reasignar el dueño del perfil usá el endpoint específico de reasignación."
+        )
 
     if 'data' in profile_data:
         profile_data['data'] = await enforce_profile_uploaded_images_in_data(
@@ -4784,6 +4995,8 @@ async def admin_update_profile(profile_id: str, profile_data: Dict[str, Any], re
             sub_type=profile_data.get('sub_type', existing.get('sub_type')),
             request=request,
             path='data',
+            allowed_scopes=ADMIN_PROFILE_IMAGE_INPUT_SCOPES,
+            owner_user_id=current_owner_user_id,
         )
     profile_data['updated_at'] = datetime.now(timezone.utc).isoformat()
     
@@ -4814,6 +5027,15 @@ async def admin_reassign_profile(profile_id: str, payload: AdminQRProfileReassig
 
     if profile.get('profile_type') == 'business' and normalized_target.get('user_type') != 'business':
         raise HTTPException(status_code=400, detail="Los perfiles empresariales solo pueden reasignarse a cuentas empresa")
+
+    image_field_cache: Dict[Tuple[str, str], Set[str]] = {}
+    await validate_profile_upload_ownership(
+        profile,
+        owner_user_id=payload.new_user_id,
+        request=request,
+        image_field_cache=image_field_cache,
+        allowed_scopes=ADMIN_PROFILE_IMAGE_INPUT_SCOPES,
+    )
 
     await db.qr_profiles.update_one(
         {'id': profile_id},
@@ -4919,7 +5141,11 @@ async def admin_create_store_product(product_data: ProductBase, request: Request
     admin = await get_current_admin(request)
     now = datetime.now(timezone.utc).isoformat()
     product_doc = product_data.model_dump()
-    product_doc = sanitize_product_image_field(product_doc, request=request)
+    product_doc = sanitize_product_image_field(
+        product_doc,
+        request=request,
+        allowed_scopes=PRODUCT_IMAGE_INPUT_SCOPES,
+    )
     if product_doc.get('category') == 'business':
         product_doc['item_type'] = 'subscription_service'
     if product_doc.get('item_type') != 'subscription_service':
@@ -4939,7 +5165,11 @@ async def admin_create_store_product(product_data: ProductBase, request: Request
 @api_router.put("/admin/store/products/{product_id}")
 async def admin_update_store_product(product_id: str, product_data: Dict[str, Any], request: Request):
     admin = await get_current_admin(request)
-    product_data = sanitize_product_image_field(product_data, request=request)
+    product_data = sanitize_product_image_field(
+        product_data,
+        request=request,
+        allowed_scopes=PRODUCT_IMAGE_INPUT_SCOPES,
+    )
     product_data['updated_at'] = datetime.now(timezone.utc).isoformat()
     if product_data.get('category') == 'business':
         product_data['item_type'] = 'subscription_service'
@@ -5237,7 +5467,11 @@ async def get_admin_settings(request: Request):
 @api_router.put("/admin/settings")
 async def update_admin_settings(settings_data: Dict[str, Any], request: Request):
     admin = await get_current_admin(request)
-    settings_data = sanitize_settings_image_fields(settings_data, request=request)
+    settings_data = sanitize_settings_image_fields(
+        settings_data,
+        request=request,
+        allowed_scope_by_field=SETTINGS_IMAGE_ALLOWED_SCOPES,
+    )
 
     settings_data.setdefault('brand_logo_url', '')
     settings_data.setdefault('favicon_url', '')

@@ -16,6 +16,9 @@ import { AccountPage } from './pages/AccountPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { PublicProfilePage } from './pages/PublicProfilePage';
 import { ServicesPage } from './pages/ServicesPage';
+import { AboutPage } from './pages/AboutPage';
+import { ContactPage } from './pages/ContactPage';
+import { FaqPage } from './pages/FaqPage';
 import { ScanHistoryPage } from './pages/ScanHistoryPage';
 import { LeadsPage } from './pages/LeadsPage';
 import { QRDetailPage } from './pages/QRDetailPage';
@@ -68,6 +71,9 @@ function App() {
               <Route path="/payment-success" element={<PaymentSuccessPage />} />
               <Route path="/payment-failure" element={<PaymentFailurePage />} />
               <Route path="/services" element={<ServicesPage />} />
+              <Route path="/about" element={<AboutPage />} />
+              <Route path="/contact" element={<ContactPage />} />
+              <Route path="/faq" element={<FaqPage />} />
             </Routes>
             <Toaster position="top-right" />
           </BrowserRouter>

@@ -5,6 +5,7 @@ import { Textarea } from './ui/textarea';
 import { Button } from './ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { fetchProfileTypesConfig, uploadProfileImage } from '../utils/api';
+import { getEffectiveFieldType } from '../utils/imageFieldUtils';
 import { toast } from 'sonner';
 
 export const ProfileDataEditor = ({ profileType, subType, data, onChange }) => {
@@ -52,13 +53,6 @@ export const ProfileDataEditor = ({ profileType, subType, data, onChange }) => {
     if (field?.name) next[field.name] = value;
     if (field?.id && field.id !== field.name) next[field.id] = value;
     onChange(next);
-  };
-
-  const isImageField = (fieldLike) => {
-    const fieldName = typeof fieldLike === 'string'
-      ? fieldLike
-      : (fieldLike?.name || fieldLike?.id || '');
-    return /(photo|image|logo|avatar|foto|imagen)/i.test(fieldName);
   };
 
   const handleUploadImage = async (fieldKey, file, onUploaded) => {
@@ -118,7 +112,7 @@ export const ProfileDataEditor = ({ profileType, subType, data, onChange }) => {
     const label = field.label || field.name || 'Campo';
     const placeholder = field.placeholder || '';
     const required = field.required === true;
-    const type = field.type || 'text';
+    const type = getEffectiveFieldType(field);
 
     const baseProps = {
       id: fieldKey,
@@ -128,7 +122,7 @@ export const ProfileDataEditor = ({ profileType, subType, data, onChange }) => {
       required,
     };
 
-    if (type === 'image' || isImageField(field)) {
+    if (type === 'image') {
       return renderImageField({
         fieldKey,
         label,
@@ -192,7 +186,7 @@ export const ProfileDataEditor = ({ profileType, subType, data, onChange }) => {
               <div className="space-y-2">
                 {visibleFields.map((field) => {
                   const fieldKey = field.id || field.name;
-                  const fieldIsImage = isImageField(field);
+                  const fieldIsImage = getEffectiveFieldType(field) === 'image';
                   return (
                     <div key={fieldKey} className="space-y-2">
                       {!fieldIsImage && (
