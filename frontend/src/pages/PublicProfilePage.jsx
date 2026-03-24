@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { createPublicLead, fetchPublicProfile, sendLocation, trackPublicActionClick, trackPublicProfileVisit } from '../utils/api';
+import { createPublicLead, fetchPublicProfile, resolveMediaUrl, sendLocation, trackPublicActionClick, trackPublicProfileVisit } from '../utils/api';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -31,6 +31,24 @@ const THEME_COLORS = {
   encuesta: { bg: 'bg-violet-50 dark:bg-violet-950', accent: 'text-violet-600', border: 'border-violet-200 dark:border-violet-800' },
   redes: { bg: 'bg-fuchsia-50 dark:bg-fuchsia-950', accent: 'text-fuchsia-600', border: 'border-fuchsia-200 dark:border-fuchsia-800' },
   evento: { bg: 'bg-rose-50 dark:bg-rose-950', accent: 'text-rose-600', border: 'border-rose-200 dark:border-rose-800' },
+};
+const PERSONAL_TYPE_LABELS = {
+  medico: 'Perfil Médico',
+  mascota: 'Mascota',
+  vehiculo: 'Vehículo',
+  nino: 'Perfil de cuidado',
+};
+const BUSINESS_TYPE_LABELS = {
+  restaurante: 'Restaurante',
+  hotel: 'Hotel',
+  wifi: 'Acceso WiFi',
+  tarjeta: 'Tarjeta Digital',
+  catalogo: 'Catálogo',
+  turismo: 'Turismo',
+  checkin: 'Check-in',
+  encuesta: 'Encuesta',
+  redes: 'Redes Sociales',
+  evento: 'Evento',
 };
 
 const DataRow = ({ label, value, icon: Icon }) => {
@@ -66,8 +84,10 @@ const ContactCard = ({ title, children }) => (
 const looksLikeUrl = (value) => typeof value === 'string' && /^(https?:\/\/|www\.)/i.test(value.trim());
 const looksLikeImageUrl = (value) =>
   typeof value === 'string' &&
-  /^(https?:\/\/|www\.)/i.test(value.trim()) &&
-  /(\.png|\.jpe?g|\.webp|\.gif|\.bmp|\.svg)(\?.*)?$/i.test(value.trim());
+  (
+    /^\/?uploads\//i.test(value.trim()) ||
+    /(\.png|\.jpe?g|\.webp|\.gif|\.bmp|\.svg)(\?.*)?$/i.test(value.trim())
+  );
 const isImageFieldName = (name) => /(photo|image|logo|avatar|foto|imagen)/i.test(name || '');
 const splitMultilineValue = (value) => String(value || '').split('\n').map((line) => line.trim()).filter(Boolean);
 const TEMPLATE_ICON_MAP = {
@@ -97,24 +117,89 @@ const TEMPLATE_ICON_MAP = {
   dog: Dog,
 };
 const getTemplateIcon = (iconName) => TEMPLATE_ICON_MAP[iconName] || null;
-const normalizeExternalUrl = (value) => {
+const normalizeExternalLink = (value) => {
   if (!value || typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
-  return trimmed.startsWith('http') ? trimmed : `https://${trimmed}`;
+  if (/^(https?:\/\/|mailto:|tel:)/i.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+};
+const normalizePublicActionUrl = (value) => {
+  if (!value || typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^(https?:\/\/|mailto:|tel:)/i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith('/')) return resolveMediaUrl(trimmed);
+  if (/^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(\/.*)?$/i.test(trimmed)) return `https://${trimmed}`;
+  return null;
+};
+const normalizeProfileType = (value) => (String(value || '').trim().toLowerCase() === 'business' ? 'business' : 'personal');
+const FLOATING_BUTTON_ALIASES = {
+  location: 'send_location',
+  call: 'call_contact',
+  emergency_call: 'call_emergency',
+  google_review: 'rate_restaurant',
+  catalog_pdf: 'view_catalog_pdf',
+};
+const normalizeFloatingButtonType = (buttonType, profileType) => {
+  const normalizedProfileType = normalizeProfileType(profileType);
+  const rawType = String(buttonType || '').trim().toLowerCase();
+  if (!rawType) return null;
+
+  let mappedType = FLOATING_BUTTON_ALIASES[rawType] || rawType;
+  if (rawType === 'call') {
+    mappedType = normalizedProfileType === 'business' ? 'call_business' : 'call_contact';
+  }
+
+  const allowedTypes = normalizedProfileType === 'business'
+    ? ['send_survey', 'rate_restaurant', 'view_catalog_pdf', 'whatsapp', 'call_business', 'website']
+    : ['call_contact', 'send_location', 'call_emergency', 'whatsapp', 'share_profile'];
+
+  return allowedTypes.includes(mappedType) ? mappedType : null;
+};
+const buildGoogleReviewUrl = (data) => {
+  if (!data || typeof data !== 'object') return null;
+  const directLink = normalizePublicActionUrl(data.google_review_link || data.review_url || data.tripadvisor_url);
+  if (directLink) return directLink;
+  const placeId = String(data.google_review_place_id || '').trim();
+  return placeId ? `https://search.google.com/local/writereview?placeid=${encodeURIComponent(placeId)}` : null;
+};
+const buildProfileLocationUrl = (data) => {
+  if (!data || typeof data !== 'object') return null;
+
+  const latitude = Number(data.lat ?? data.latitude);
+  const longitude = Number(data.lng ?? data.longitude ?? data.lon);
+  if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    return `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+  }
+
+  const address = [data.address, data.location, data.map_address]
+    .map((value) => String(value || '').trim())
+    .find(Boolean);
+
+  return address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}` : null;
+};
+const resolveProfileImageUrl = (value, { trustExplicitImageField = false } = {}) => {
+  if (!value || typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (!trustExplicitImageField && !looksLikeImageUrl(trimmed)) return null;
+  return resolveMediaUrl(trimmed);
 };
 const getFirstImageFromData = (data, candidates = []) => {
   if (!data || typeof data !== 'object') return null;
   for (const key of candidates) {
     const raw = data[key];
-    if (looksLikeImageUrl(raw)) {
-      return normalizeExternalUrl(raw);
+    const resolved = resolveProfileImageUrl(raw, { trustExplicitImageField: true });
+    if (resolved) {
+      return resolved;
     }
   }
   const allValues = Object.values(data);
   for (const value of allValues) {
-    if (looksLikeImageUrl(value)) {
-      return normalizeExternalUrl(value);
+    const resolved = resolveProfileImageUrl(value);
+    if (resolved) {
+      return resolved;
     }
   }
   return null;
@@ -138,6 +223,25 @@ const getPersonalPhoto = (subType, data) => {
   };
   return getFirstImageFromData(data, candidateBySubtype[subType] || ['photo_url', 'avatar_url', 'image_url']);
 };
+const getPublicProfileTitle = (profile, data) => {
+  const safeData = data && typeof data === 'object' ? data : {};
+  const titleCandidates = profile?.profile_type === 'business'
+    ? ['business_name', 'hotel_name', 'catalog_name', 'place_name', 'event_name', 'survey_title', 'display_name', 'title', 'full_name', 'company']
+    : ['display_name', 'full_name', 'person_name', 'pet_name', 'patient_name', 'plate'];
+
+  for (const key of titleCandidates) {
+    const value = safeData[key];
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  if (profile?.profile_type === 'business') {
+    return BUSINESS_TYPE_LABELS[profile?.sub_type] || 'Perfil Empresa';
+  }
+
+  return PERSONAL_TYPE_LABELS[profile?.sub_type] || 'Perfil QR';
+};
 
 export const PublicProfilePage = () => {
   const { hash } = useParams();
@@ -157,6 +261,7 @@ export const PublicProfilePage = () => {
   const hasTrackedVisitRef = useRef(false);
   const turnstileContainerRef = useRef(null);
   const turnstileWidgetIdRef = useRef(null);
+  const autoLocationTriggeredRef = useRef(false);
   const { t } = useTranslation();
 
   const loadProfile = useCallback(async () => {
@@ -189,21 +294,36 @@ export const PublicProfilePage = () => {
 
   useEffect(() => { loadProfile(); }, [loadProfile]);
 
-  const handleSendLocation = async () => {
-    if (!navigator.geolocation) { toast.error('Geolocalización no disponible'); return; }
+  const handleSendLocation = useCallback(({ silent = false } = {}) => {
+    if (!navigator.geolocation) {
+      if (!silent) {
+        toast.error('Geolocalización no disponible');
+      }
+      return;
+    }
     setSending(true);
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         try {
           await sendLocation(hash, position.coords.latitude, position.coords.longitude, navigator.userAgent);
-          toast.success('Ubicación enviada');
+          if (!silent) {
+            toast.success('Ubicación enviada');
+          }
         } catch (error) {
-          toast.error('Error al enviar ubicación');
+          if (!silent) {
+            toast.error('Error al enviar ubicación');
+          }
         } finally { setSending(false); }
       },
-      () => { toast.error('No se pudo obtener la ubicación'); setSending(false); }
+      () => {
+        if (!silent) {
+          toast.error('No se pudo obtener la ubicación');
+        }
+        setSending(false);
+      },
+      { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
     );
-  };
+  }, [hash]);
 
   const leadFormConfig = profile?.lead_form_config || {
     enabled: profile?.profile_type === 'business',
@@ -213,6 +333,18 @@ export const PublicProfilePage = () => {
     captcha_enabled: false,
     turnstile_site_key: '',
   };
+  const notificationConfig = profile?.notification_config && typeof profile.notification_config === 'object'
+    ? profile.notification_config
+    : {};
+  const publicSettings = profile?.public_settings && typeof profile.public_settings === 'object'
+    ? profile.public_settings
+    : {};
+  const requestLocationAutomatically = Boolean(
+    publicSettings.request_location_automatically
+    ?? publicSettings.requestLocationAutomatically
+    ?? notificationConfig.request_location_automatically
+    ?? notificationConfig.requestLocationAutomatically
+  );
 
   useEffect(() => {
     if (!leadFormConfig.captcha_enabled || !leadFormConfig.turnstile_site_key) {
@@ -281,6 +413,58 @@ export const PublicProfilePage = () => {
     };
   }, [leadFormConfig.captcha_enabled, leadFormConfig.turnstile_site_key]);
 
+  useEffect(() => {
+    if (!profile || profile.profile_type !== 'personal' || !requestLocationAutomatically) {
+      return undefined;
+    }
+    if (autoLocationTriggeredRef.current) {
+      return undefined;
+    }
+
+    autoLocationTriggeredRef.current = true;
+    const storageKey = `qr:auto-location:${hash}`;
+
+    try {
+      if (window.sessionStorage.getItem(storageKey) === '1') {
+        return undefined;
+      }
+      window.sessionStorage.setItem(storageKey, '1');
+    } catch (_) {
+      // Ignore storage failures and continue with a single in-memory attempt.
+    }
+
+    let cancelled = false;
+    let timeoutId = null;
+
+    const scheduleRequest = (delay = 900) => {
+      timeoutId = window.setTimeout(() => {
+        if (!cancelled) {
+          handleSendLocation({ silent: true });
+        }
+      }, delay);
+    };
+
+    if (navigator.permissions?.query) {
+      navigator.permissions.query({ name: 'geolocation' })
+        .then((result) => {
+          if (cancelled || result.state === 'denied') return;
+          scheduleRequest(result.state === 'granted' ? 400 : 1200);
+        })
+        .catch(() => {
+          scheduleRequest(1200);
+        });
+    } else {
+      scheduleRequest(1200);
+    }
+
+    return () => {
+      cancelled = true;
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [handleSendLocation, hash, profile, requestLocationAutomatically]);
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -347,13 +531,13 @@ export const PublicProfilePage = () => {
             {photoSrc && (
               <img
                 src={photoSrc}
-                alt={profile.name}
+                alt="Foto del perfil"
                 className="h-20 w-20 rounded-xl object-cover border border-border bg-background"
               />
             )}
             <div className="min-w-0 flex-1">
               <p className={`text-xs uppercase tracking-wide font-semibold ${theme.accent}`}>Perfil Médico</p>
-              <h2 className="text-lg font-bold leading-tight">{profile.name}</h2>
+              <h2 className="text-lg font-bold leading-tight">{d.patient_name || d.full_name || 'Información médica'}</h2>
               {d.blood_type && (
                 <Badge variant="outline" className="mt-2">
                   Tipo de sangre: {d.blood_type}
@@ -394,7 +578,7 @@ export const PublicProfilePage = () => {
             {photoSrc ? (
               <img
                 src={photoSrc}
-                alt={d.pet_name || profile.name}
+                alt={d.pet_name || 'Foto de la mascota'}
                 className="h-20 w-20 rounded-xl object-cover border border-border bg-background"
               />
             ) : (
@@ -403,7 +587,7 @@ export const PublicProfilePage = () => {
               </div>
             )}
             <div className="min-w-0">
-              <h2 className="text-xl font-bold leading-tight">{d.pet_name || profile.name}</h2>
+              <h2 className="text-xl font-bold leading-tight">{d.pet_name || 'Mascota identificada'}</h2>
               <div className="flex flex-wrap gap-2 mt-2">
                 {d.species && <Badge variant="outline">{d.species}</Badge>}
                 {d.breed && <Badge variant="outline">{d.breed}</Badge>}
@@ -453,9 +637,10 @@ export const PublicProfilePage = () => {
           const FieldIcon = getTemplateIcon(field.icon);
 
           if (fieldType === 'image' || isImageFieldName(fieldKey) || looksLikeImageUrl(stringValue)) {
-            const imageSrc = looksLikeUrl(stringValue) && !stringValue.startsWith('http')
-              ? `https://${stringValue}`
-              : stringValue;
+            const imageSrc = fieldType === 'image'
+              ? resolveProfileImageUrl(stringValue, { trustExplicitImageField: true })
+              : resolveProfileImageUrl(stringValue, { trustExplicitImageField: isImageFieldName(fieldKey) });
+            if (!imageSrc) return null;
             return (
               <div key={field.id || fieldKey} className="space-y-2 rounded-lg border border-border/70 bg-background p-3">
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</p>
@@ -491,7 +676,8 @@ export const PublicProfilePage = () => {
           }
 
           if (fieldType === 'url' || looksLikeUrl(stringValue)) {
-            const href = stringValue.startsWith('http') ? stringValue : `https://${stringValue}`;
+            const href = normalizeExternalLink(stringValue);
+            if (!href) return null;
             return (
               <a
                 key={field.id || fieldKey}
@@ -574,7 +760,7 @@ export const PublicProfilePage = () => {
             {photoSrc ? (
               <img
                 src={photoSrc}
-                alt={d.plate || profile.name}
+                alt={d.plate || 'Foto del vehículo'}
                 className="h-20 w-20 rounded-xl object-cover border border-border bg-background"
               />
             ) : (
@@ -584,7 +770,7 @@ export const PublicProfilePage = () => {
             )}
             <div>
               <p className={`text-xs uppercase tracking-wide font-semibold ${theme.accent}`}>Vehículo</p>
-              <h2 className="text-lg font-bold">{d.plate || profile.name}</h2>
+              <h2 className="text-lg font-bold">{d.plate || [d.brand, d.model].filter(Boolean).join(' ') || 'Vehículo identificado'}</h2>
               {(d.brand || d.model) && <p className="text-sm text-muted-foreground">{[d.brand, d.model].filter(Boolean).join(' ')}</p>}
             </div>
           </div>
@@ -617,13 +803,13 @@ export const PublicProfilePage = () => {
             {photoSrc && (
               <img
                 src={photoSrc}
-                alt={d.full_name || d.person_name || profile.name}
+                alt={d.full_name || d.person_name || 'Foto del perfil'}
                 className="h-20 w-20 rounded-xl object-cover border border-border bg-background"
               />
             )}
             <div>
               <p className={`text-xs uppercase tracking-wide font-semibold ${theme.accent}`}>Perfil de cuidado</p>
-              <h2 className="text-lg font-bold">{d.full_name || d.person_name || profile.name}</h2>
+              <h2 className="text-lg font-bold">{d.full_name || d.person_name || 'Persona identificada'}</h2>
               {d.age && <p className="text-sm text-muted-foreground">Edad: {d.age}</p>}
             </div>
           </div>
@@ -649,9 +835,9 @@ export const PublicProfilePage = () => {
 
   const renderRestaurant = () => (
     <div className="space-y-4">
-      {normalizeExternalUrl(d.logo_url) && (
+      {resolveProfileImageUrl(d.logo_url, { trustExplicitImageField: true }) && (
         <div className="flex justify-center">
-          <img src={normalizeExternalUrl(d.logo_url)} alt={profile.name} className="h-16 w-16 rounded-full border border-border object-cover bg-white" />
+          <img src={resolveProfileImageUrl(d.logo_url, { trustExplicitImageField: true })} alt="Logo del perfil" className="h-16 w-16 rounded-full border border-border object-cover bg-white" />
         </div>
       )}
       {d.description && (
@@ -698,11 +884,11 @@ export const PublicProfilePage = () => {
 
       <div className="space-y-2">
         {d.phone && <PhoneLink phone={d.phone} label="Reservas y contacto" />}
-        {normalizeExternalUrl(d.website) && (
-          <a href={normalizeExternalUrl(d.website)} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-primary text-sm hover:underline">
-            <Globe className="h-4 w-4" />{d.website}
-          </a>
-        )}
+      {normalizeExternalLink(d.website) && (
+        <a href={normalizeExternalLink(d.website)} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-primary text-sm hover:underline">
+          <Globe className="h-4 w-4" />{d.website}
+        </a>
+      )}
       </div>
     </div>
   );
@@ -781,11 +967,11 @@ export const PublicProfilePage = () => {
 
   const renderBusinessCard = () => (
     <div className="space-y-4">
-      {normalizeExternalUrl(d.avatar_url || d.photo_url || d.logo_url) && (
+      {resolveProfileImageUrl(d.avatar_url || d.photo_url || d.logo_url, { trustExplicitImageField: true }) && (
         <div className="flex justify-center">
           <img
-            src={normalizeExternalUrl(d.avatar_url || d.photo_url || d.logo_url)}
-            alt={d.full_name || profile.name}
+            src={resolveProfileImageUrl(d.avatar_url || d.photo_url || d.logo_url, { trustExplicitImageField: true })}
+            alt={d.full_name || 'Avatar del perfil'}
             className="w-20 h-20 rounded-full object-cover border border-border/70"
           />
         </div>
@@ -803,7 +989,7 @@ export const PublicProfilePage = () => {
           </a>
         )}
         {d.website && (
-          <a href={d.website.startsWith('http') ? d.website : `https://${d.website}`} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-primary text-sm hover:underline">
+          <a href={normalizeExternalLink(d.website)} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-primary text-sm hover:underline">
             <Globe className="h-4 w-4" />{d.website}
           </a>
         )}
@@ -841,8 +1027,8 @@ export const PublicProfilePage = () => {
       )}
       {d.contact_info && <DataRow label="Contacto" value={d.contact_info} icon={Phone} />}
       {d.phone && <PhoneLink phone={d.phone} />}
-      {normalizeExternalUrl(d.website) && (
-        <a href={normalizeExternalUrl(d.website)} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-primary text-sm hover:underline">
+      {normalizeExternalLink(d.website) && (
+        <a href={normalizeExternalLink(d.website)} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-primary text-sm hover:underline">
           <Globe className="h-4 w-4" />{d.website}
         </a>
       )}
@@ -907,10 +1093,10 @@ export const PublicProfilePage = () => {
 
   const renderEvent = () => (
     <div className="space-y-4">
-      {normalizeExternalUrl(d.banner_url || d.cover_image || d.image_url) && (
+      {resolveProfileImageUrl(d.banner_url || d.cover_image || d.image_url, { trustExplicitImageField: true }) && (
         <img
-          src={normalizeExternalUrl(d.banner_url || d.cover_image || d.image_url)}
-          alt={d.event_name || profile.name}
+          src={resolveProfileImageUrl(d.banner_url || d.cover_image || d.image_url, { trustExplicitImageField: true })}
+          alt={d.event_name || 'Imagen del evento'}
           className="w-full h-36 object-cover rounded-lg border border-border/70"
         />
       )}
@@ -1020,18 +1206,7 @@ export const PublicProfilePage = () => {
   };
   const ProfileIcon = SUB_TYPE_ICONS[profile.sub_type] || QrCode;
   const profileActions = Array.isArray(profile.actions) ? profile.actions : [];
-  const BUSINESS_TYPE_LABELS = {
-    restaurante: 'Restaurante',
-    hotel: 'Hotel',
-    wifi: 'Acceso WiFi',
-    tarjeta: 'Tarjeta Digital',
-    catalogo: 'Catálogo',
-    turismo: 'Turismo',
-    checkin: 'Check-in',
-    encuesta: 'Encuesta',
-    redes: 'Redes Sociales',
-    evento: 'Evento',
-  };
+  const publicProfileTitle = getPublicProfileTitle(profile, d);
   const businessSubtitle = d.description || d.welcome_message || d.business_name || d.hotel_name || d.display_name || '';
   const businessBannerUrl = getFirstImageFromData(d, [
     'cover_image',
@@ -1047,9 +1222,131 @@ export const PublicProfilePage = () => {
     'avatar',
     'avatar_url',
   ]);
+  const selectedFloatingButtons = (
+    Array.isArray(publicSettings.floating_buttons) ? publicSettings.floating_buttons
+      : Array.isArray(publicSettings.floatingButtons) ? publicSettings.floatingButtons
+      : Array.isArray(notificationConfig.floating_buttons) ? notificationConfig.floating_buttons
+      : Array.isArray(notificationConfig.floatingButtons) ? notificationConfig.floatingButtons
+      : []
+  )
+    .map((item) => normalizeFloatingButtonType(item, profile.profile_type))
+    .filter((item, index, array) => item && array.indexOf(item) === index)
+    .slice(0, 3);
+  const resolvedFloatingButtonsSource = (
+    Array.isArray(publicSettings.resolved_floating_buttons) ? publicSettings.resolved_floating_buttons
+      : Array.isArray(publicSettings.floating_buttons_resolved) ? publicSettings.floating_buttons_resolved
+      : Array.isArray(publicSettings.resolved_buttons) ? publicSettings.resolved_buttons
+      : Array.isArray(profile.floating_buttons_resolved) ? profile.floating_buttons_resolved
+      : Array.isArray(profile.resolved_buttons) ? profile.resolved_buttons
+      : Array.isArray(notificationConfig.floating_buttons_resolved) ? notificationConfig.floating_buttons_resolved
+      : Array.isArray(notificationConfig.resolved_buttons) ? notificationConfig.resolved_buttons
+      : []
+  );
+  const normalizePhoneValue = (value) => {
+    if (!value) return null;
+    const normalized = String(value).trim().replace(/[^\d+]/g, '');
+    if (!normalized) return null;
+    return normalized.startsWith('+') ? normalized.slice(1) : normalized;
+  };
+  const primaryPhone = [
+    d.whatsapp,
+    d.phone,
+    d.owner_phone,
+    d.contact_phone,
+    d.emergency_phone,
+    d.vet_phone,
+    d.doctor_phone,
+  ].find(Boolean);
+  const dedupeActions = (items) => {
+    const seen = new Set();
+    return items.filter((item) => {
+      if (!item) return false;
+      const key = `${item.type || 'generic'}|${item.url || item.label || ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+  const contactPhone = [d.contact_phone, d.owner_phone, d.phone].find(Boolean);
+  const emergencyPhone = [d.emergency_phone, d.contact_phone].find(Boolean);
+  const businessPhone = [d.phone, d.contact_phone, d.business_phone].find(Boolean);
+  const fallbackFloatingButtons = selectedFloatingButtons.map((buttonType) => {
+    if (buttonType === 'send_location' && profile.profile_type === 'personal') {
+      const locationUrl = buildProfileLocationUrl(d);
+      return locationUrl ? { type: 'send_location', label: 'Enviar ubicación', url: locationUrl } : null;
+    }
+    if (buttonType === 'whatsapp') {
+      const existingWhatsappAction = profileActions.find((action) => action?.type === 'whatsapp' && action?.url);
+      if (existingWhatsappAction) return existingWhatsappAction;
+      const whatsappPhone = normalizePhoneValue(primaryPhone);
+      if (!whatsappPhone) return null;
+      return {
+        type: 'whatsapp',
+        label: 'WhatsApp',
+        url: `https://wa.me/${whatsappPhone}?text=${encodeURIComponent(`Hola, te contacto desde el perfil ${publicProfileTitle}.`)}`,
+      };
+    }
+    if (buttonType === 'rate_restaurant') {
+      const googleReviewAction = profileActions.find((action) => action?.type === 'google_review' && action?.url);
+      if (googleReviewAction) return googleReviewAction;
+      const reviewUrl = buildGoogleReviewUrl(d);
+      return reviewUrl ? { type: 'rate_restaurant', label: 'Calificar negocio', url: reviewUrl } : null;
+    }
+    if (buttonType === 'call_contact') {
+      const normalizedPhone = normalizePhoneValue(contactPhone);
+      return normalizedPhone ? { type: 'call_contact', label: 'Llamar contacto', url: `tel:+${normalizedPhone}` } : null;
+    }
+    if (buttonType === 'call_emergency') {
+      const normalizedPhone = normalizePhoneValue(emergencyPhone);
+      return normalizedPhone ? { type: 'call_emergency', label: 'Llamar emergencia', url: `tel:+${normalizedPhone}` } : null;
+    }
+    if (buttonType === 'call_business') {
+      const normalizedPhone = normalizePhoneValue(businessPhone);
+      return normalizedPhone ? { type: 'call_business', label: 'Llamar negocio', url: `tel:+${normalizedPhone}` } : null;
+    }
+    if (buttonType === 'share_profile') {
+      return { type: 'share_profile', label: 'Compartir perfil', url: window.location.href };
+    }
+    if (buttonType === 'send_survey') {
+      const surveyUrl = normalizePublicActionUrl(d.survey_url || d.feedback_url || d.form_url || d.google_form_url);
+      return surveyUrl ? { type: 'send_survey', label: 'Responder encuesta', url: surveyUrl } : null;
+    }
+    if (buttonType === 'view_catalog_pdf') {
+      const catalogUrl = normalizePublicActionUrl(d.catalog_pdf_url || d.catalog_url || d.menu_pdf_url || d.menu_url || d.pdf_url);
+      return catalogUrl ? { type: 'view_catalog_pdf', label: 'Ver catálogo', url: catalogUrl } : null;
+    }
+    if (buttonType === 'google_review') {
+      return profileActions.find((action) => action?.type === 'google_review' && action?.url) || null;
+    }
+    if (buttonType === 'website') {
+      const websiteUrl = normalizePublicActionUrl(d.website || d.site_url);
+      return websiteUrl ? { type: 'website', label: 'Sitio web', url: websiteUrl } : null;
+    }
+    return null;
+  });
+  const resolvedFloatingButtons = resolvedFloatingButtonsSource
+    .filter((button) => button && typeof button === 'object')
+    .map((button) => ({
+      type: button.type || button.key || 'generic',
+      label: button.label || button.title || 'Abrir enlace',
+      url: button.url || button.href || null,
+    }));
+  const floatingActionButtons = dedupeActions(
+    (resolvedFloatingButtons.length > 0 ? resolvedFloatingButtons : fallbackFloatingButtons)
+  ).slice(0, 3);
+  const quickActions = dedupeActions(
+    floatingActionButtons.length > 0 ? [...floatingActionButtons, ...profileActions] : profileActions
+  );
   const renderActionIcon = (actionType) => {
     if (actionType === 'google_review') return <Star className="mr-2 h-4 w-4" />;
+    if (actionType === 'rate_restaurant') return <Star className="mr-2 h-4 w-4" />;
     if (actionType === 'whatsapp') return <MessageSquare className="mr-2 h-4 w-4" />;
+    if (actionType === 'send_location' || actionType === 'location') return <MapPin className="mr-2 h-4 w-4" />;
+    if (actionType === 'call_contact' || actionType === 'call_emergency' || actionType === 'call_business' || actionType === 'call') {
+      return <Phone className="mr-2 h-4 w-4" />;
+    }
+    if (actionType === 'send_survey') return <FileText className="mr-2 h-4 w-4" />;
+    if (actionType === 'share_profile') return <QrCode className="mr-2 h-4 w-4" />;
     return <Globe className="mr-2 h-4 w-4" />;
   };
 
@@ -1066,6 +1363,10 @@ export const PublicProfilePage = () => {
   };
 
   const handleActionClick = async (action) => {
+    if (action?.type === 'location') {
+      handleSendLocation();
+      return;
+    }
     try {
       await trackPublicActionClick(hash, {
         action_type: action?.type || 'generic',
@@ -1077,6 +1378,10 @@ export const PublicProfilePage = () => {
       // Best-effort tracking.
     }
     if (action?.url) {
+      if (/^(mailto:|tel:)/i.test(action.url)) {
+        window.location.href = action.url;
+        return;
+      }
       window.open(action.url, '_blank', 'noopener,noreferrer');
     }
   };
@@ -1129,16 +1434,17 @@ export const PublicProfilePage = () => {
   const pageBgClass = profile.profile_type === 'business'
     ? `bg-gradient-to-b from-background via-background to-muted/30 ${theme.bg}`
     : theme.bg;
+  const hasMobileFloatingActions = floatingActionButtons.length > 0;
 
   return (
-    <div className={`min-h-screen ${pageBgClass} p-4`} data-testid="public-profile-page">
+    <div className={`min-h-screen ${pageBgClass} p-4 ${hasMobileFloatingActions ? 'pb-28' : ''}`} data-testid="public-profile-page">
       <div className="max-w-md mx-auto pt-4">
         <Card className="mb-4 overflow-hidden">
           {profile.profile_type === 'business' && businessBannerUrl && (
             <div className="relative h-36 w-full border-b border-border/60">
               <img
                 src={businessBannerUrl}
-                alt={profile.name}
+                alt="Imagen principal del perfil"
                 className="h-full w-full object-cover"
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent"></div>
@@ -1149,7 +1455,7 @@ export const PublicProfilePage = () => {
               <div className="mx-auto -mt-12 mb-2">
                 <img
                   src={businessLogoUrl}
-                  alt={`${profile.name} logo`}
+                  alt="Logo del perfil"
                   className="w-20 h-20 rounded-full object-cover border-4 border-background shadow-lg bg-background"
                 />
               </div>
@@ -1164,7 +1470,7 @@ export const PublicProfilePage = () => {
               </Badge>
             )}
             <CardTitle className="font-heading text-2xl" data-testid="profile-name">
-              {profile.name}
+              {publicProfileTitle}
             </CardTitle>
             {profile.profile_type === 'business' && businessSubtitle && (
               <p className="text-sm text-muted-foreground mt-1">{businessSubtitle}</p>
@@ -1179,7 +1485,7 @@ export const PublicProfilePage = () => {
           <Button
             className="w-full mb-4"
             size="lg"
-            onClick={handleSendLocation}
+            onClick={() => handleSendLocation()}
             disabled={sending}
             data-testid="send-location-btn"
           >
@@ -1188,13 +1494,13 @@ export const PublicProfilePage = () => {
           </Button>
         )}
 
-        {profileActions.length > 0 && (
+        {quickActions.length > 0 && (
           <Card className="mb-4">
             <CardHeader className="pb-3">
               <CardTitle className="text-base">Acciones Rápidas</CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
-              {profileActions.map((action, index) => (
+              {quickActions.map((action, index) => (
                 <Button
                   type="button"
                   key={`${action.type || 'action'}-${index}`}
@@ -1284,6 +1590,31 @@ export const PublicProfilePage = () => {
               </form>
             </CardContent>
           </Card>
+        )}
+
+        {hasMobileFloatingActions && (
+          <div className="fixed inset-x-4 bottom-4 z-40 sm:hidden">
+            <div className={`grid gap-2 rounded-2xl border border-border/70 bg-background/95 p-2 shadow-2xl backdrop-blur ${
+              floatingActionButtons.length === 1
+                ? 'grid-cols-1'
+                : floatingActionButtons.length === 2
+                  ? 'grid-cols-2'
+                  : 'grid-cols-3'
+            }`}>
+              {floatingActionButtons.map((action, index) => (
+                <Button
+                  type="button"
+                  key={`${action.type || 'floating'}-${index}`}
+                  className="h-11 px-3"
+                  variant={action.type === 'location' ? 'default' : 'outline'}
+                  onClick={() => handleActionClick(action)}
+                >
+                  {renderActionIcon(action.type)}
+                  <span className="truncate">{action.label || 'Abrir'}</span>
+                </Button>
+              ))}
+            </div>
+          </div>
         )}
 
         <p className="text-center text-xs text-muted-foreground mt-4 pb-4">

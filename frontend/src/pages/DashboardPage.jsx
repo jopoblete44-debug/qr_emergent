@@ -26,6 +26,61 @@ import { API_BASE } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Link } from 'react-router-dom';
 
+const DEFAULT_PUBLIC_SETTINGS = {
+  request_location_automatically: false,
+  floating_buttons: [],
+};
+const FLOATING_BUTTON_ALIASES = {
+  location: 'send_location',
+  call: 'call_contact',
+  emergency_call: 'call_emergency',
+  google_review: 'rate_restaurant',
+  catalog_pdf: 'view_catalog_pdf',
+};
+
+const normalizeProfileType = (value) => (String(value || '').trim().toLowerCase() === 'business' ? 'business' : 'personal');
+
+const normalizeFloatingButtonType = (buttonType, profileType) => {
+  const normalizedProfileType = normalizeProfileType(profileType);
+  const rawType = String(buttonType || '').trim().toLowerCase();
+  if (!rawType) return null;
+
+  let mappedType = FLOATING_BUTTON_ALIASES[rawType] || rawType;
+  if (rawType === 'call') {
+    mappedType = normalizedProfileType === 'business' ? 'call_business' : 'call_contact';
+  }
+
+  const allowedTypes = normalizedProfileType === 'business'
+    ? ['send_survey', 'rate_restaurant', 'view_catalog_pdf', 'whatsapp', 'call_business', 'website']
+    : ['call_contact', 'send_location', 'call_emergency', 'whatsapp', 'share_profile'];
+
+  return allowedTypes.includes(mappedType) ? mappedType : null;
+};
+
+const normalizePublicSettings = (value, profileType) => {
+  const raw = value && typeof value === 'object' ? value : {};
+  const floatingButtonsSource = Array.isArray(raw.floating_buttons)
+    ? raw.floating_buttons
+    : Array.isArray(raw.floatingButtons)
+      ? raw.floatingButtons
+      : [];
+
+  return {
+    request_location_automatically: Boolean(
+      raw.request_location_automatically ?? raw.requestLocationAutomatically
+    ),
+    floating_buttons: floatingButtonsSource
+      .map((buttonType) => normalizeFloatingButtonType(buttonType, profileType))
+      .filter((buttonType, index, array) => buttonType && array.indexOf(buttonType) === index)
+      .slice(0, 3),
+  };
+};
+
+const getProfilePublicSettings = (profile) => normalizePublicSettings(
+  profile?.public_settings ?? profile?.notification_config ?? DEFAULT_PUBLIC_SETTINGS,
+  profile?.profile_type
+);
+
 export const DashboardPage = () => {
   const FALLBACK_PERSONAL_SUBTYPES = [
     { value: 'medico', label: 'Médico' },
@@ -66,6 +121,7 @@ export const DashboardPage = () => {
     sub_type: 'medico',
     status: 'indefinite',
     data: {},
+    public_settings: DEFAULT_PUBLIC_SETTINGS,
   });
 
   useEffect(() => {
@@ -121,7 +177,10 @@ export const DashboardPage = () => {
     }
 
     try {
-      await createQRProfile(newProfile);
+      await createQRProfile({
+        ...newProfile,
+        public_settings: normalizePublicSettings(newProfile.public_settings, newProfile.profile_type),
+      });
       toast.success('Perfil QR creado exitosamente');
       setShowCreateDialog(false);
       setNewProfile({
@@ -131,6 +190,7 @@ export const DashboardPage = () => {
         sub_type: 'medico',
         status: 'indefinite',
         data: {},
+        public_settings: DEFAULT_PUBLIC_SETTINGS,
       });
       loadData();
     } catch (error) {
@@ -143,6 +203,7 @@ export const DashboardPage = () => {
     setEditingProfile({
       ...profile,
       alias: profile.alias || profile.name,
+      public_settings: getProfilePublicSettings(profile),
     });
     setShowEditDialog(true);
   };
@@ -155,6 +216,7 @@ export const DashboardPage = () => {
         profile_type: editingProfile.profile_type,
         sub_type: editingProfile.sub_type,
         data: editingProfile.data,
+        public_settings: normalizePublicSettings(editingProfile.public_settings, editingProfile.profile_type),
       });
       toast.success('Perfil actualizado exitosamente');
       setShowEditDialog(false);
@@ -219,6 +281,13 @@ export const DashboardPage = () => {
 
   const personalSubTypes = profileTypeOptions.personal || FALLBACK_PERSONAL_SUBTYPES;
   const businessSubTypes = profileTypeOptions.business || FALLBACK_BUSINESS_SUBTYPES;
+  const canCreateProfiles = !qrCreationPolicy || qrCreationPolicy.can_create;
+  const isPersonUser = user?.user_type === 'person';
+  const blockedProfilesCtaHref = isPersonUser
+    ? '/shop?category=personal'
+    : '/shop?category=business&item_type=subscription_service';
+  const blockedProfilesCtaLabel = isPersonUser ? 'Comprar productos' : 'Comprar Suscripción';
+  const blockedEmptyStateLabel = isPersonUser ? 'Comprar productos' : 'Ver Suscripciones';
 
   const subTypes = newProfile.profile_type === 'personal' ? personalSubTypes : businessSubTypes;
 
@@ -240,21 +309,21 @@ export const DashboardPage = () => {
             <h1 className="font-heading font-bold text-3xl sm:text-4xl" data-testid="dashboard-title">
               Mi Dashboard
             </h1>
-            {(!qrCreationPolicy || qrCreationPolicy.can_create) ? (
+            {canCreateProfiles ? (
               <Button onClick={() => setShowCreateDialog(true)} data-testid="create-profile-btn">
                 <Plus className="mr-2 h-4 w-4" />
                 Crear Perfil QR
               </Button>
             ) : (
-              <Link to="/shop?category=business&item_type=subscription_service">
+              <Link to={blockedProfilesCtaHref}>
                 <Button variant="outline" data-testid="buy-subscription-btn">
-                  Comprar Suscripción
+                  {blockedProfilesCtaLabel}
                 </Button>
               </Link>
             )}
           </div>
 
-          {qrCreationPolicy && !qrCreationPolicy.can_create && (
+          {qrCreationPolicy && !qrCreationPolicy.can_create && !isPersonUser && (
             <Card className="mb-6 border-amber-300 bg-amber-50">
               <CardContent className="py-4 text-sm">
                 <p className="font-medium text-amber-900">Creación manual de QR deshabilitada</p>
@@ -324,18 +393,20 @@ export const DashboardPage = () => {
                 <QrCode className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
                 <h3 className="font-semibold text-lg mb-2">No tienes perfiles QR</h3>
                 <p className="text-muted-foreground mb-4">
-                  {(!qrCreationPolicy || qrCreationPolicy.can_create)
+                  {canCreateProfiles
                     ? 'Crea tu primer perfil QR para comenzar'
-                    : 'La creación manual está deshabilitada. Compra una suscripción para obtener cupos QR.'}
+                    : isPersonUser
+                      ? 'Explorá productos personales para activar un nuevo QR.'
+                      : 'La creación manual está deshabilitada. Compra una suscripción para obtener cupos QR.'}
                 </p>
-                {(!qrCreationPolicy || qrCreationPolicy.can_create) ? (
+                {canCreateProfiles ? (
                   <Button onClick={() => setShowCreateDialog(true)} data-testid="empty-create-profile-btn">
                     Crear Perfil QR
                   </Button>
                 ) : (
-                  <Link to="/shop?category=business&item_type=subscription_service">
+                  <Link to={blockedProfilesCtaHref}>
                     <Button variant="outline" data-testid="empty-buy-subscription-btn">
-                      Ver Suscripciones
+                      {blockedEmptyStateLabel}
                     </Button>
                   </Link>
                 )}
@@ -398,7 +469,13 @@ export const DashboardPage = () => {
                       value={newProfile.profile_type}
                       onValueChange={(value) => {
                         const firstSubtype = (value === 'personal' ? personalSubTypes : businessSubTypes)[0]?.value || '';
-                        setNewProfile({ ...newProfile, profile_type: value, sub_type: firstSubtype, data: {} });
+                        setNewProfile({
+                          ...newProfile,
+                          profile_type: value,
+                          sub_type: firstSubtype,
+                          data: {},
+                          public_settings: normalizePublicSettings(newProfile.public_settings, value),
+                        });
                       }}
                     >
                       <SelectTrigger data-testid="profile-type-select">
@@ -454,6 +531,8 @@ export const DashboardPage = () => {
                     subType={newProfile.sub_type}
                     data={newProfile.data}
                     onChange={(data) => setNewProfile({ ...newProfile, data })}
+                    publicSettings={newProfile.public_settings}
+                    onPublicSettingsChange={(public_settings) => setNewProfile({ ...newProfile, public_settings })}
                   />
                 </TabsContent>
               </Tabs>
@@ -531,6 +610,8 @@ export const DashboardPage = () => {
                       subType={editingProfile.sub_type}
                       data={editingProfile.data || {}}
                       onChange={(data) => setEditingProfile({ ...editingProfile, data })}
+                      publicSettings={editingProfile.public_settings || DEFAULT_PUBLIC_SETTINGS}
+                      onPublicSettingsChange={(public_settings) => setEditingProfile({ ...editingProfile, public_settings })}
                     />
                   </TabsContent>
                 </Tabs>

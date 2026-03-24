@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { createCheckoutPreference, fetchCheckoutQuote, fetchShippingRegions } from '../utils/api';
+import { createCheckoutPreference, fetchCheckoutQuote, fetchShippingRegions, resolveMediaUrl } from '../utils/api';
 import { toast } from 'sonner';
 import { useAuth } from '../contexts/AuthContext';
 import { useCart } from '../contexts/CartContext';
@@ -234,11 +234,17 @@ export const CheckoutPage = () => {
                     {cart.map(item => (
                       <div key={item.id} className="flex justify-between items-center py-3 border-b border-border" data-testid={`checkout-item-${item.id}`}>
                         <div className="flex items-center space-x-4">
-                          <img
-                            src={item.image_url}
-                            alt={item.name}
-                            className="w-16 h-16 object-cover rounded"
-                          />
+                          {resolveMediaUrl(item.image_url) ? (
+                            <img
+                              src={resolveMediaUrl(item.image_url)}
+                              alt={item.name}
+                              className="w-16 h-16 object-cover rounded"
+                            />
+                          ) : (
+                            <div className="flex h-16 w-16 items-center justify-center rounded bg-muted text-muted-foreground">
+                              <Package className="h-5 w-5" />
+                            </div>
+                          )}
                           <div>
                             <h3 className="font-semibold">{item.name}</h3>
                             <div className="flex items-center gap-2 mt-2">

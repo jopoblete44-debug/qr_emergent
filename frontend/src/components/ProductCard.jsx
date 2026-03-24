@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Building2, HeartPulse, QrCode, ShoppingCart, Sparkles } from 'lucide-react';
+import { resolveMediaUrl } from '../utils/api';
 
 const PRODUCT_VISUALS = {
   personal: {
@@ -36,11 +37,12 @@ const getProductVisualMeta = (product = {}) => {
 
 export const ProductMedia = ({ product, variant = 'card' }) => {
   const isThumb = variant === 'thumb';
+  const productImageUrl = resolveMediaUrl(product?.image_url);
 
-  if (product?.image_url) {
+  if (productImageUrl) {
     return (
       <img
-        src={product.image_url}
+        src={productImageUrl}
         alt={product.name}
         className={isThumb ? 'h-full w-full object-cover' : 'h-full w-full object-cover transition-transform duration-300 group-hover:scale-105'}
       />

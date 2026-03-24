@@ -73,6 +73,40 @@ UPLOAD_FILE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 PROFILE_IMAGE_INPUT_SCOPES = {'profiles', 'general'}
 ADMIN_PROFILE_IMAGE_INPUT_SCOPES = {'profiles', 'general'}
 PRODUCT_IMAGE_INPUT_SCOPES = {'store-products', 'general'}
+QR_PUBLIC_SETTINGS_MAX_FLOATING_BUTTONS = 3
+PRODUCT_VISIBLE_TO_VALUES = {'visitor', 'person', 'business'}
+PRODUCT_VISIBLE_TO_ALIASES = {
+    'visitor': 'visitor',
+    'visitante': 'visitor',
+    'guest': 'visitor',
+    'public': 'visitor',
+    'all': 'visitor',
+    'person': 'person',
+    'persona': 'person',
+    'personal': 'person',
+    'people': 'person',
+    'business': 'business',
+    'empresa': 'business',
+    'negocio': 'business',
+    'company': 'business',
+}
+PROFILE_FLOATING_BUTTON_DEFINITIONS: Dict[str, Dict[str, Dict[str, str]]] = {
+    'personal': {
+        'call_contact': {'label': 'Llamar contacto'},
+        'send_location': {'label': 'Enviar ubicación'},
+        'call_emergency': {'label': 'Llamar emergencia'},
+        'whatsapp': {'label': 'WhatsApp'},
+        'share_profile': {'label': 'Compartir perfil'},
+    },
+    'business': {
+        'send_survey': {'label': 'Responder encuesta'},
+        'rate_restaurant': {'label': 'Calificar negocio'},
+        'view_catalog_pdf': {'label': 'Ver catálogo'},
+        'whatsapp': {'label': 'WhatsApp'},
+        'call_business': {'label': 'Llamar negocio'},
+        'website': {'label': 'Sitio web'},
+    },
+}
 SETTINGS_IMAGE_ALLOWED_SCOPES: Dict[str, Set[str]] = {
     'brand_logo_url': {'brand', 'general'},
     'favicon_url': {'brand', 'general'},
@@ -149,6 +183,7 @@ class QRProfileBase(BaseModel):
     status: Literal['subscription', 'indefinite', 'paused'] = 'indefinite'
     data: Dict[str, Any] = {}
     notification_config: Dict[str, Any] = {}
+    public_settings: Dict[str, Any] = Field(default_factory=dict)
     expiration_date: Optional[str] = None  # ISO format date
 
 class QRProfileCreate(QRProfileBase):
@@ -162,6 +197,7 @@ class QRProfileUpdate(BaseModel):
     status: Optional[Literal['subscription', 'indefinite', 'paused']] = None
     data: Optional[Dict[str, Any]] = None
     notification_config: Optional[Dict[str, Any]] = None
+    public_settings: Optional[Dict[str, Any]] = None
     expiration_date: Optional[str] = None
 
 class QRProfile(QRProfileBase):
@@ -170,6 +206,8 @@ class QRProfile(QRProfileBase):
     user_id: str
     hash: str
     scan_count: int = 0
+    uploads_base_url: Optional[str] = None
+    resolved_data: Optional[Any] = None
     created_at: datetime
     updated_at: datetime
     deleted_at: Optional[datetime] = None
@@ -188,6 +226,7 @@ class ProductBase(BaseModel):
     auto_generate_qr: bool = False
     auto_qr_profile_type: Optional[Literal['personal', 'business']] = None
     auto_qr_sub_type: Optional[str] = None
+    visible_to: Optional[Literal['visitor', 'person', 'business']] = None
 
 class Product(ProductBase):
     model_config = ConfigDict(extra="ignore")
@@ -1931,6 +1970,15 @@ async def get_current_admin(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=403, detail="Admin access required")
     return user
 
+async def get_current_user_optional(request: Request) -> Optional[Dict[str, Any]]:
+    auth_header = request.headers.get('Authorization')
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return None
+    try:
+        return await get_current_user(request)
+    except HTTPException:
+        return None
+
 # ==================== QR HELPERS ====================
 
 def generate_qr_hash(user_id: str, profile_name: str) -> str:
@@ -2053,13 +2101,7 @@ def sanitize_campaign_value(value: Optional[str], max_len: int = 120) -> Optiona
     return cleaned[:max_len]
 
 def build_google_review_link(settings: Dict[str, Any]) -> Optional[str]:
-    raw_link = sanitize_campaign_value(settings.get('google_review_link'), max_len=500)
-    if raw_link:
-        return raw_link
-    place_id = sanitize_campaign_value(settings.get('google_review_place_id'))
-    if place_id:
-        return f"https://search.google.com/local/writereview?placeid={quote(place_id)}"
-    return None
+    return build_google_review_link_from_config(settings)
 
 def normalize_phone_number(phone: Optional[str]) -> Optional[str]:
     if not phone:
@@ -2076,11 +2118,317 @@ def build_whatsapp_link(phone: Optional[str], message: Optional[str]) -> Optiona
     final_message = message or 'Hola, te contacto desde el QR.'
     return f"https://wa.me/{normalized_phone}?text={quote(final_message)}"
 
+def coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return value != 0
+    normalized = str(value).strip().lower()
+    if normalized in {'true', '1', 'yes', 'si', 'sí', 'on'}:
+        return True
+    if normalized in {'false', '0', 'no', 'off', ''}:
+        return False
+    return bool(value)
+
+def normalize_qr_profile_type(value: Any, default: str = 'personal') -> str:
+    normalized = str(value or '').strip().lower()
+    return normalized if normalized in PROFILE_FLOATING_BUTTON_DEFINITIONS else default
+
+def get_allowed_floating_button_types(profile_type: Any) -> List[str]:
+    normalized_profile_type = normalize_qr_profile_type(profile_type)
+    return list(PROFILE_FLOATING_BUTTON_DEFINITIONS.get(normalized_profile_type, {}).keys())
+
+def normalize_profile_public_settings(
+    raw_settings: Any,
+    *,
+    profile_type: Any,
+    legacy_settings: Any = None,
+    strict: bool = False,
+) -> Dict[str, Any]:
+    if raw_settings is None:
+        base_settings: Dict[str, Any] = {}
+    elif isinstance(raw_settings, dict):
+        base_settings = dict(raw_settings)
+    elif strict:
+        raise HTTPException(status_code=400, detail='public_settings debe enviarse como objeto')
+    else:
+        base_settings = {}
+
+    legacy_base_settings: Dict[str, Any] = {}
+    if isinstance(legacy_settings, dict):
+        if 'request_location_automatically' in legacy_settings:
+            legacy_base_settings['request_location_automatically'] = legacy_settings.get('request_location_automatically')
+        elif 'request_location' in legacy_settings:
+            legacy_base_settings['request_location_automatically'] = legacy_settings.get('request_location')
+
+        if 'floating_buttons' in legacy_settings:
+            legacy_base_settings['floating_buttons'] = legacy_settings.get('floating_buttons')
+        elif 'floatingButtons' in legacy_settings:
+            legacy_base_settings['floating_buttons'] = legacy_settings.get('floatingButtons')
+
+    if legacy_base_settings:
+        merged_settings = dict(legacy_base_settings)
+        merged_settings.update(base_settings)
+        base_settings = merged_settings
+
+    request_location_value = base_settings.get('request_location_automatically')
+    if request_location_value is None and 'request_location' in base_settings:
+        request_location_value = base_settings.get('request_location')
+    base_settings['request_location_automatically'] = coerce_bool(
+        request_location_value,
+        default=False,
+    )
+
+    raw_buttons = base_settings.get('floating_buttons')
+    if raw_buttons is None and 'floatingButtons' in base_settings:
+        raw_buttons = base_settings.get('floatingButtons')
+    if raw_buttons is None:
+        raw_buttons = []
+    if not isinstance(raw_buttons, list):
+        if strict:
+            raise HTTPException(status_code=400, detail='public_settings.floating_buttons debe enviarse como lista')
+        raw_buttons = []
+
+    allowed_buttons = get_allowed_floating_button_types(profile_type)
+    allowed_set = set(allowed_buttons)
+    normalized_buttons: List[str] = []
+    invalid_buttons: List[str] = []
+
+    for item in raw_buttons:
+        if not isinstance(item, str):
+            if strict:
+                invalid_buttons.append(str(item))
+            continue
+        normalized_button = item.strip().lower()
+        if not normalized_button:
+            continue
+        if normalized_button not in allowed_set:
+            if strict:
+                invalid_buttons.append(normalized_button)
+            continue
+        if normalized_button in normalized_buttons:
+            continue
+        if len(normalized_buttons) >= QR_PUBLIC_SETTINGS_MAX_FLOATING_BUTTONS:
+            if strict:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f'public_settings.floating_buttons admite hasta {QR_PUBLIC_SETTINGS_MAX_FLOATING_BUTTONS} opciones',
+                )
+            break
+        normalized_buttons.append(normalized_button)
+
+    if strict and invalid_buttons:
+        allowed_text = ', '.join(allowed_buttons) or 'sin opciones disponibles'
+        invalid_text = ', '.join(invalid_buttons)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f'Botones flotantes inválidos para perfil {normalize_qr_profile_type(profile_type)}: '
+                f'{invalid_text}. Permitidos: {allowed_text}'
+            ),
+        )
+
+    base_settings['floating_buttons'] = normalized_buttons[:QR_PUBLIC_SETTINGS_MAX_FLOATING_BUTTONS]
+    base_settings['request_location'] = base_settings['request_location_automatically']
+    for legacy_key in ('resolved_floating_buttons', 'floating_buttons_resolved', 'resolved_buttons'):
+        base_settings.pop(legacy_key, None)
+    return base_settings
+
+def build_legacy_notification_config(
+    notification_config: Any,
+    public_settings: Dict[str, Any],
+) -> Dict[str, Any]:
+    normalized = dict(notification_config) if isinstance(notification_config, dict) else {}
+    normalized['request_location_automatically'] = coerce_bool(
+        public_settings.get('request_location_automatically'),
+        default=False,
+    )
+    normalized['request_location'] = normalized['request_location_automatically']
+    normalized['floating_buttons'] = list(public_settings.get('floating_buttons') or [])[:QR_PUBLIC_SETTINGS_MAX_FLOATING_BUTTONS]
+
+    for legacy_key in ('resolved_floating_buttons', 'floating_buttons_resolved', 'resolved_buttons'):
+        normalized.pop(legacy_key, None)
+
+    resolved_buttons = public_settings.get('resolved_floating_buttons')
+    if isinstance(resolved_buttons, list):
+        normalized['resolved_floating_buttons'] = resolved_buttons
+        normalized['floating_buttons_resolved'] = resolved_buttons
+        normalized['resolved_buttons'] = resolved_buttons
+
+    return normalized
+
+def enrich_public_settings_runtime(
+    public_settings: Dict[str, Any],
+    *,
+    resolved_floating_buttons: Optional[List[Dict[str, str]]] = None,
+) -> Dict[str, Any]:
+    normalized = dict(public_settings)
+    normalized['request_location'] = coerce_bool(
+        normalized.get('request_location_automatically'),
+        default=False,
+    )
+
+    for legacy_key in ('resolved_floating_buttons', 'floating_buttons_resolved', 'resolved_buttons'):
+        normalized.pop(legacy_key, None)
+
+    if resolved_floating_buttons is not None:
+        normalized['resolved_floating_buttons'] = resolved_floating_buttons
+        normalized['floating_buttons_resolved'] = resolved_floating_buttons
+        normalized['resolved_buttons'] = resolved_floating_buttons
+
+    return normalized
+
+def build_absolute_uploaded_file_url(value: Any, request: Optional[Request] = None) -> Optional[str]:
+    normalized = sanitize_uploaded_image_reference_for_output(value, request=request)
+    if normalized is None:
+        return None
+    if normalized == '':
+        return ''
+    return f"{get_upload_base_url(request)}{normalized}"
+
+def parse_optional_float(value: Any) -> Optional[float]:
+    try:
+        if value is None or str(value).strip() == '':
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+def build_tel_link(phone: Optional[str]) -> Optional[str]:
+    normalized_phone = normalize_phone_number(phone)
+    if not normalized_phone:
+        return None
+    return f"tel:+{normalized_phone}"
+
+def normalize_public_link_url(value: Any, request: Optional[Request] = None) -> Optional[str]:
+    if value is None:
+        return None
+    trimmed = str(value).strip()
+    if not trimmed:
+        return None
+    parsed = urlparse(trimmed)
+    if parsed.scheme in {'http', 'https', 'mailto', 'tel'} and (parsed.netloc or parsed.scheme in {'mailto', 'tel'}):
+        return trimmed
+    if trimmed.startswith('/'):
+        return f"{get_upload_base_url(request)}{trimmed}"
+    if not parsed.scheme and not parsed.netloc and re.match(r'^[A-Za-z0-9.-]+\.[A-Za-z]{2,}(/.*)?$', trimmed):
+        return f'https://{trimmed}'
+    return None
+
+def build_google_review_link_from_config(settings: Dict[str, Any]) -> Optional[str]:
+    raw_link = normalize_public_link_url(settings.get('google_review_link'))
+    if raw_link:
+        return raw_link
+    place_id = sanitize_campaign_value(settings.get('google_review_place_id'))
+    if place_id:
+        return f"https://search.google.com/local/writereview?placeid={quote(place_id)}"
+    return None
+
+def get_first_present_value(payload: Dict[str, Any], keys: List[str]) -> Optional[Any]:
+    for key in keys:
+        candidate = payload.get(key)
+        if candidate is None:
+            continue
+        if isinstance(candidate, str) and not candidate.strip():
+            continue
+        return candidate
+    return None
+
+def build_public_profile_url(profile: Dict[str, Any]) -> Optional[str]:
+    profile_hash = str(profile.get('hash') or '').strip()
+    if not profile_hash:
+        return None
+    return f"{FRONTEND_URL.rstrip('/')}/profile/{quote(profile_hash)}"
+
+def build_profile_location_link(profile_data: Dict[str, Any]) -> Optional[str]:
+    lat = parse_optional_float(get_first_present_value(profile_data, ['lat', 'latitude']))
+    lng = parse_optional_float(get_first_present_value(profile_data, ['lng', 'longitude', 'lon']))
+    if lat is not None and lng is not None:
+        return f"https://www.google.com/maps/search/?api=1&query={lat},{lng}"
+
+    address = get_first_present_value(profile_data, ['address', 'location', 'map_address'])
+    if address:
+        return f"https://www.google.com/maps/search/?api=1&query={quote(str(address).strip())}"
+    return None
+
+def build_profile_floating_button(
+    button_type: str,
+    profile: Dict[str, Any],
+    public_settings: Dict[str, Any],
+    request: Optional[Request] = None,
+) -> Optional[Dict[str, str]]:
+    profile_data = profile.get('data') if isinstance(profile.get('data'), dict) else {}
+    profile_name = str(profile.get('name') or 'este perfil').strip()
+    whatsapp_message = (
+        str(profile_data.get('whatsapp_message') or '').strip()
+        or f"Hola, te escribo por el perfil QR {profile_name}."
+    )
+
+    if button_type == 'call_contact':
+        url = build_tel_link(get_first_present_value(profile_data, ['contact_phone', 'owner_phone', 'phone']))
+    elif button_type == 'send_location':
+        url = build_profile_location_link(profile_data)
+    elif button_type == 'call_emergency':
+        url = build_tel_link(get_first_present_value(profile_data, ['emergency_phone', 'contact_phone']))
+    elif button_type == 'whatsapp':
+        url = build_whatsapp_link(
+            get_first_present_value(profile_data, ['whatsapp', 'phone', 'contact_phone', 'owner_phone', 'emergency_phone']),
+            whatsapp_message,
+        )
+    elif button_type == 'share_profile':
+        url = build_public_profile_url(profile)
+    elif button_type == 'send_survey':
+        url = normalize_public_link_url(
+            get_first_present_value(profile_data, ['survey_url', 'feedback_url', 'form_url', 'google_form_url']),
+            request=request,
+        )
+    elif button_type == 'rate_restaurant':
+        url = (
+            build_google_review_link_from_config(profile_data)
+            or normalize_public_link_url(get_first_present_value(profile_data, ['review_url', 'tripadvisor_url']), request=request)
+        )
+    elif button_type == 'view_catalog_pdf':
+        url = normalize_public_link_url(
+            get_first_present_value(profile_data, ['catalog_pdf_url', 'catalog_url', 'menu_pdf_url', 'menu_url', 'pdf_url']),
+            request=request,
+        )
+    elif button_type == 'call_business':
+        url = build_tel_link(get_first_present_value(profile_data, ['phone', 'contact_phone', 'business_phone']))
+    elif button_type == 'website':
+        url = normalize_public_link_url(get_first_present_value(profile_data, ['website', 'site_url']), request=request)
+    else:
+        url = None
+
+    if not url:
+        return None
+
+    profile_type = normalize_qr_profile_type(profile.get('profile_type'))
+    label = PROFILE_FLOATING_BUTTON_DEFINITIONS.get(profile_type, {}).get(button_type, {}).get('label') or button_type
+    return {
+        'type': button_type,
+        'label': label,
+        'url': url,
+    }
+
+def resolve_profile_floating_buttons(
+    profile: Dict[str, Any],
+    public_settings: Dict[str, Any],
+    request: Optional[Request] = None,
+) -> List[Dict[str, str]]:
+    resolved_buttons: List[Dict[str, str]] = []
+    for button_type in public_settings.get('floating_buttons', [])[:QR_PUBLIC_SETTINGS_MAX_FLOATING_BUTTONS]:
+        button = build_profile_floating_button(button_type, profile, public_settings, request=request)
+        if button:
+            resolved_buttons.append(button)
+    return resolved_buttons
+
 def build_public_profile_actions(profile: Dict[str, Any], settings: Dict[str, Any]) -> List[Dict[str, str]]:
     actions: List[Dict[str, str]] = []
 
     if settings.get('enable_google_reviews_cta'):
-        review_link = build_google_review_link(settings)
+        review_link = build_google_review_link_from_config(settings)
         if review_link:
             actions.append({
                 'type': 'google_review',
@@ -2471,6 +2819,9 @@ def sanitize_uploaded_image_reference_for_output(value: Any, request: Optional[R
         return None
     return normalized
 
+def resolve_uploaded_image_reference_for_output(value: Any, request: Optional[Request] = None) -> Optional[str]:
+    return build_absolute_uploaded_file_url(value, request=request)
+
 def enforce_uploaded_image_reference(value: Any, field_label: str, request: Optional[Request] = None) -> Optional[str]:
     if value is None:
         return None
@@ -2601,6 +2952,11 @@ def process_uploaded_image_field_value(
         )
     return sanitize_uploaded_image_reference_for_output(value, request=request)
 
+def resolve_uploaded_image_field_value_for_output(value: Any, request: Optional[Request] = None) -> Any:
+    if isinstance(value, list):
+        return [resolve_uploaded_image_field_value_for_output(item, request=request) for item in value]
+    return resolve_uploaded_image_reference_for_output(value, request=request)
+
 def should_treat_as_image_field(key: Any, explicit_image_fields: Optional[Set[str]] = None) -> bool:
     key_str = str(key or '').strip()
     if explicit_image_fields and key_str.lower() in explicit_image_fields:
@@ -2656,6 +3012,39 @@ def enforce_uploaded_images_in_data(
         ]
     return data
 
+def resolve_uploaded_images_in_data_for_output(
+    data: Any,
+    path: str = 'data',
+    *,
+    explicit_image_fields: Optional[Set[str]] = None,
+    request: Optional[Request] = None,
+) -> Any:
+    if isinstance(data, dict):
+        resolved: Dict[str, Any] = {}
+        for key, value in data.items():
+            next_path = f'{path}.{key}'
+            if should_treat_as_image_field(key, explicit_image_fields):
+                resolved[key] = resolve_uploaded_image_field_value_for_output(value, request=request)
+            else:
+                resolved[key] = resolve_uploaded_images_in_data_for_output(
+                    value,
+                    next_path,
+                    explicit_image_fields=explicit_image_fields,
+                    request=request,
+                )
+        return resolved
+    if isinstance(data, list):
+        return [
+            resolve_uploaded_images_in_data_for_output(
+                item,
+                f'{path}[{idx}]',
+                explicit_image_fields=explicit_image_fields,
+                request=request,
+            )
+            for idx, item in enumerate(data)
+        ]
+    return data
+
 async def enforce_profile_uploaded_images_in_data(
     data: Any,
     *,
@@ -2682,7 +3071,8 @@ async def sanitize_profile_document(
     profile: Dict[str, Any],
     *,
     request: Optional[Request] = None,
-    image_field_cache: Optional[Dict[Tuple[str, str], Set[str]]] = None
+    image_field_cache: Optional[Dict[Tuple[str, str], Set[str]]] = None,
+    include_public_runtime: bool = False,
 ) -> Dict[str, Any]:
     normalized = dict(profile)
     normalized_data = normalized.get('data')
@@ -2699,6 +3089,38 @@ async def sanitize_profile_document(
             request=request,
             strict=False,
         )
+        normalized['resolved_data'] = resolve_uploaded_images_in_data_for_output(
+            normalized['data'],
+            'resolved_data',
+            explicit_image_fields=explicit_image_fields,
+            request=request,
+        )
+    else:
+        normalized['resolved_data'] = normalized_data
+
+    normalized['uploads_base_url'] = f"{get_upload_base_url(request)}/uploads"
+    normalized_public_settings = normalize_profile_public_settings(
+        normalized.get('public_settings'),
+        profile_type=normalized.get('profile_type'),
+        legacy_settings=normalized.get('notification_config'),
+        strict=False,
+    )
+    resolved_floating_buttons: Optional[List[Dict[str, str]]] = None
+    if include_public_runtime:
+        resolved_floating_buttons = resolve_profile_floating_buttons(
+            normalized,
+            normalized_public_settings,
+            request=request,
+        )
+    normalized_public_settings = enrich_public_settings_runtime(
+        normalized_public_settings,
+        resolved_floating_buttons=resolved_floating_buttons,
+    )
+    normalized['public_settings'] = normalized_public_settings
+    normalized['notification_config'] = build_legacy_notification_config(
+        normalized.get('notification_config'),
+        normalized_public_settings,
+    )
     return sanitize_for_json(normalized)
 
 async def validate_profile_upload_ownership(
@@ -2822,6 +3244,88 @@ def save_uploaded_image(
     relative_path = file_path.relative_to(UPLOADS_DIR).as_posix()
     return f"{get_upload_base_url(request)}/uploads/{relative_path}"
 
+def infer_default_product_visible_to(product_like: Optional[Dict[str, Any]] = None, category: Optional[Any] = None) -> str:
+    category_value = str(category if category is not None else (product_like or {}).get('category') or '').strip().lower()
+    if category_value == 'business':
+        return 'business'
+    if category_value == 'personal':
+        return 'person'
+    return 'visitor'
+
+def normalize_product_visible_to(
+    value: Any,
+    *,
+    category: Optional[Any] = None,
+    product_like: Optional[Dict[str, Any]] = None,
+    strict: bool = False,
+) -> str:
+    default_value = infer_default_product_visible_to(product_like=product_like, category=category)
+    if value is None:
+        return default_value
+
+    if isinstance(value, (list, tuple, set)):
+        if strict:
+            raise HTTPException(status_code=400, detail='visible_to debe enviarse como string: visitor, person o business')
+        for item in value:
+            normalized_item = normalize_product_visible_to(
+                item,
+                category=category,
+                product_like=product_like,
+                strict=False,
+            )
+            if normalized_item in PRODUCT_VISIBLE_TO_VALUES:
+                return normalized_item
+        return default_value
+
+    normalized = PRODUCT_VISIBLE_TO_ALIASES.get(str(value).strip().lower())
+    if normalized:
+        return normalized
+
+    if strict:
+        raise HTTPException(status_code=400, detail='visible_to inválido. Permitidos: visitor, person, business')
+    return default_value
+
+def resolve_viewer_product_audience(viewer_user: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not viewer_user:
+        return None
+    normalized = PRODUCT_VISIBLE_TO_ALIASES.get(str(viewer_user.get('user_type') or '').strip().lower())
+    if normalized in {'person', 'business'}:
+        return normalized
+    return None
+
+def is_product_visible_for_viewer(product: Dict[str, Any], viewer_user: Optional[Dict[str, Any]]) -> bool:
+    viewer_audience = resolve_viewer_product_audience(viewer_user)
+    if viewer_audience is None:
+        return True
+    product_visible_to = normalize_product_visible_to(
+        product.get('visible_to'),
+        category=product.get('category'),
+        product_like=product,
+        strict=False,
+    )
+    return product_visible_to in {'visitor', viewer_audience}
+
+def sanitize_product_input_document(
+    product_data: Dict[str, Any],
+    *,
+    request: Optional[Request] = None,
+    existing_product: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    sanitized = sanitize_product_image_field(
+        dict(product_data),
+        request=request,
+        allowed_scopes=PRODUCT_IMAGE_INPUT_SCOPES,
+    )
+    effective_category = sanitized.get('category', (existing_product or {}).get('category'))
+    visible_to_source = sanitized.get('visible_to') if 'visible_to' in sanitized else (existing_product or {}).get('visible_to')
+    sanitized['visible_to'] = normalize_product_visible_to(
+        visible_to_source,
+        category=effective_category,
+        product_like=existing_product or sanitized,
+        strict='visible_to' in sanitized,
+    )
+    return sanitized
+
 def normalize_coupon_code(code: Optional[str]) -> Optional[str]:
     if not code:
         return None
@@ -2857,7 +3361,11 @@ async def ensure_free_coupon_exists() -> Dict[str, Any]:
     coupon = await db.coupons.find_one({'code': 'FREE'}, {'_id': 0})
     return sanitize_for_json(coupon) if coupon else {}
 
-async def calculate_order_pricing(order_data: OrderBase, settings: Dict[str, Any]) -> Dict[str, Any]:
+async def calculate_order_pricing(
+    order_data: OrderBase,
+    settings: Dict[str, Any],
+    viewer_user: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     validated_items = []
     subtotal = 0.0
 
@@ -2865,6 +3373,8 @@ async def calculate_order_pricing(order_data: OrderBase, settings: Dict[str, Any
         product = await db.products.find_one({'id': item.product_id, 'active': {'$ne': False}}, {'_id': 0})
         if not product:
             raise HTTPException(status_code=404, detail=f"Producto no encontrado: {item.product_id}")
+        if not is_product_visible_for_viewer(product, viewer_user):
+            raise HTTPException(status_code=403, detail=f"Producto no disponible para tu tipo de cuenta: {item.product_id}")
         if product.get('stock', 0) < item.quantity:
             raise HTTPException(status_code=400, detail=f"Stock insuficiente para {product.get('name', 'producto')}")
 
@@ -2965,6 +3475,7 @@ async def generate_auto_qr_profile_for_purchase(user: Dict[str, Any], item: Dict
             'generated_at': now.isoformat(),
         },
         'notification_config': {},
+        'public_settings': normalize_profile_public_settings({}, profile_type=profile_type, strict=False),
         'expiration_date': None,
         'scan_count': 0,
         'created_at': now.isoformat(),
@@ -3095,7 +3606,18 @@ def normalize_product_document(product: Dict[str, Any], request: Optional[Reques
     normalized.setdefault('auto_qr_profile_type', None)
     normalized.setdefault('auto_qr_sub_type', None)
     normalized.setdefault('stock', 0)
+    normalized['visible_to'] = normalize_product_visible_to(
+        normalized.get('visible_to'),
+        category=normalized.get('category'),
+        product_like=normalized,
+        strict=False,
+    )
     normalized = sanitize_product_image_field(normalized, request=request, strict=False)
+    normalized['uploads_base_url'] = f"{get_upload_base_url(request)}/uploads"
+    normalized['image_url_resolved'] = resolve_uploaded_image_reference_for_output(
+        normalized.get('image_url'),
+        request=request,
+    )
     return sanitize_for_json(normalized)
 
 def sanitize_for_json(value: Any) -> Any:
@@ -3362,13 +3884,16 @@ async def get_products(request: Request, category: Optional[str] = None, item_ty
         query['category'] = category
     if item_type:
         query['item_type'] = item_type
+    viewer_user = await get_current_user_optional(request)
     products = await db.products.find(query, {'_id': 0}).to_list(100)
-    return [normalize_product_document(product, request=request) for product in products]
+    visible_products = [product for product in products if is_product_visible_for_viewer(product, viewer_user)]
+    return [normalize_product_document(product, request=request) for product in visible_products]
 
 @api_router.get("/products/{product_id}")
 async def get_product(product_id: str, request: Request):
+    viewer_user = await get_current_user_optional(request)
     product = await db.products.find_one({'id': product_id, 'active': {'$ne': False}}, {'_id': 0})
-    if not product:
+    if not product or not is_product_visible_for_viewer(product, viewer_user):
         raise HTTPException(status_code=404, detail="Product not found")
     return normalize_product_document(product, request=request)
 
@@ -3384,12 +3909,13 @@ async def get_shipping_regions():
     }
 
 @api_router.post("/checkout/quote")
-async def checkout_quote(order_data: OrderBase):
+async def checkout_quote(order_data: OrderBase, request: Request):
     settings = await get_platform_settings()
     if settings.get('enable_store', True) is False:
         raise HTTPException(status_code=403, detail="La tienda está deshabilitada")
 
-    pricing = await calculate_order_pricing(order_data, settings)
+    viewer_user = await get_current_user_optional(request)
+    pricing = await calculate_order_pricing(order_data, settings, viewer_user=viewer_user)
     return {
         'subtotal': pricing['subtotal'],
         'shipping_cost': pricing['shipping_cost'],
@@ -3408,7 +3934,7 @@ async def create_preference(order_data: OrderBase, request: Request):
     if settings.get('enable_store', True) is False:
         raise HTTPException(status_code=403, detail="La tienda está deshabilitada")
 
-    pricing = await calculate_order_pricing(order_data, settings)
+    pricing = await calculate_order_pricing(order_data, settings, viewer_user=user)
     includes_subscription_items = any(
         item.get('item_type') == 'subscription_service'
         for item in pricing.get('validated_items', [])
@@ -3763,6 +4289,13 @@ async def create_qr_profile(profile_data: QRProfileCreate, request: Request):
         profile_payload.setdefault('subscription_bucket_id', consumed_bucket_id)
         profile_payload.setdefault('subscription_owner_user_id', str(quota_owner_user_id))
 
+    normalized_public_settings = normalize_profile_public_settings(
+        profile_data.public_settings,
+        profile_type=profile_data.profile_type,
+        legacy_settings=profile_data.notification_config,
+        strict=True,
+    )
+
     profile_doc = {
         'id': profile_id,
         'user_id': user['id'],
@@ -3773,7 +4306,11 @@ async def create_qr_profile(profile_data: QRProfileCreate, request: Request):
         'sub_type': profile_data.sub_type,
         'status': profile_status,
         'data': profile_payload,
-        'notification_config': profile_data.notification_config,
+        'notification_config': build_legacy_notification_config(
+            profile_data.notification_config,
+            normalized_public_settings,
+        ),
+        'public_settings': normalized_public_settings,
         'expiration_date': profile_data.expiration_date,
         'subscription_bucket_id': consumed_bucket_id if quota_consumed else None,
         'subscription_owner_user_id': str(quota_owner_user_id) if quota_consumed and quota_owner_user_id else None,
@@ -3831,15 +4368,28 @@ async def update_qr_profile(profile_id: str, profile_data: QRProfileUpdate, requ
         raise HTTPException(status_code=404, detail="Profile not found")
     
     update_data = profile_data.model_dump(exclude_unset=True)
+    effective_profile_type = update_data.get('profile_type', existing.get('profile_type'))
     if 'data' in update_data:
         update_data['data'] = await enforce_profile_uploaded_images_in_data(
             update_data.get('data') or {},
-            profile_type=update_data.get('profile_type', existing.get('profile_type')),
+            profile_type=effective_profile_type,
             sub_type=update_data.get('sub_type', existing.get('sub_type')),
             request=request,
             path='data',
             allowed_scopes=PROFILE_IMAGE_INPUT_SCOPES,
             owner_user_id=str(existing.get('user_id') or user['id']),
+        )
+    if 'public_settings' in update_data or 'notification_config' in update_data or 'profile_type' in update_data:
+        effective_notification_config = update_data.get('notification_config', existing.get('notification_config'))
+        update_data['public_settings'] = normalize_profile_public_settings(
+            update_data.get('public_settings', existing.get('public_settings')),
+            profile_type=effective_profile_type,
+            legacy_settings=effective_notification_config,
+            strict='public_settings' in update_data,
+        )
+        update_data['notification_config'] = build_legacy_notification_config(
+            effective_notification_config,
+            update_data['public_settings'],
         )
     update_data['updated_at'] = datetime.now(timezone.utc).isoformat()
     
@@ -4077,8 +4627,14 @@ async def get_public_profile(qr_hash: str, request: Request):
     settings = await get_platform_settings()
     profile['actions'] = build_public_profile_actions(profile, settings)
     profile['lead_form_config'] = build_lead_form_config(profile, settings)
+    profile['public_settings'] = normalize_profile_public_settings(
+        profile.get('public_settings'),
+        profile_type=profile.get('profile_type'),
+        legacy_settings=profile.get('notification_config'),
+        strict=False,
+    )
 
-    return await sanitize_profile_document(profile, request=request)
+    return await sanitize_profile_document(profile, request=request, include_public_runtime=True)
 
 @api_router.post("/public/profile/{qr_hash}/scan")
 async def register_scan(qr_hash: str, scan_data: LocationScanCreate, request: Request):
@@ -4896,6 +5452,12 @@ async def admin_create_qr_profile(profile_data: AdminQRProfileCreate, request: R
 
     now = datetime.now(timezone.utc)
     profile_id = str(uuid.uuid4())
+    normalized_public_settings = normalize_profile_public_settings(
+        profile_data.public_settings,
+        profile_type=profile_data.profile_type,
+        legacy_settings=profile_data.notification_config,
+        strict=True,
+    )
     profile_doc = {
         'id': profile_id,
         'user_id': profile_data.user_id,
@@ -4914,7 +5476,11 @@ async def admin_create_qr_profile(profile_data: AdminQRProfileCreate, request: R
             allowed_scopes=ADMIN_PROFILE_IMAGE_INPUT_SCOPES,
             owner_user_id=str(profile_data.user_id),
         ),
-        'notification_config': profile_data.notification_config,
+        'notification_config': build_legacy_notification_config(
+            profile_data.notification_config,
+            normalized_public_settings,
+        ),
+        'public_settings': normalized_public_settings,
         'expiration_date': profile_data.expiration_date,
         'scan_count': 0,
         'created_at': now.isoformat(),
@@ -4976,7 +5542,10 @@ async def get_all_profiles(
 async def admin_update_profile(profile_id: str, profile_data: Dict[str, Any], request: Request):
     admin = await get_current_admin(request)
     
-    existing = await db.qr_profiles.find_one({'id': profile_id}, {'_id': 0, 'profile_type': 1, 'sub_type': 1, 'user_id': 1})
+    existing = await db.qr_profiles.find_one(
+        {'id': profile_id},
+        {'_id': 0, 'profile_type': 1, 'sub_type': 1, 'user_id': 1, 'public_settings': 1, 'notification_config': 1},
+    )
     if not existing:
         raise HTTPException(status_code=404, detail="Profile not found")
 
@@ -4988,15 +5557,28 @@ async def admin_update_profile(profile_id: str, profile_data: Dict[str, Any], re
             detail="Para reasignar el dueño del perfil usá el endpoint específico de reasignación."
         )
 
+    effective_profile_type = profile_data.get('profile_type', existing.get('profile_type'))
     if 'data' in profile_data:
         profile_data['data'] = await enforce_profile_uploaded_images_in_data(
             profile_data.get('data') or {},
-            profile_type=profile_data.get('profile_type', existing.get('profile_type')),
+            profile_type=effective_profile_type,
             sub_type=profile_data.get('sub_type', existing.get('sub_type')),
             request=request,
             path='data',
             allowed_scopes=ADMIN_PROFILE_IMAGE_INPUT_SCOPES,
             owner_user_id=current_owner_user_id,
+        )
+    if 'public_settings' in profile_data or 'notification_config' in profile_data or 'profile_type' in profile_data:
+        effective_notification_config = profile_data.get('notification_config', existing.get('notification_config'))
+        profile_data['public_settings'] = normalize_profile_public_settings(
+            profile_data.get('public_settings', existing.get('public_settings')),
+            profile_type=effective_profile_type,
+            legacy_settings=effective_notification_config,
+            strict='public_settings' in profile_data,
+        )
+        profile_data['notification_config'] = build_legacy_notification_config(
+            effective_notification_config,
+            profile_data['public_settings'],
         )
     profile_data['updated_at'] = datetime.now(timezone.utc).isoformat()
     
@@ -5140,12 +5722,7 @@ async def admin_get_store_products(
 async def admin_create_store_product(product_data: ProductBase, request: Request):
     admin = await get_current_admin(request)
     now = datetime.now(timezone.utc).isoformat()
-    product_doc = product_data.model_dump()
-    product_doc = sanitize_product_image_field(
-        product_doc,
-        request=request,
-        allowed_scopes=PRODUCT_IMAGE_INPUT_SCOPES,
-    )
+    product_doc = sanitize_product_input_document(product_data.model_dump(), request=request)
     if product_doc.get('category') == 'business':
         product_doc['item_type'] = 'subscription_service'
     if product_doc.get('item_type') != 'subscription_service':
@@ -5165,10 +5742,13 @@ async def admin_create_store_product(product_data: ProductBase, request: Request
 @api_router.put("/admin/store/products/{product_id}")
 async def admin_update_store_product(product_id: str, product_data: Dict[str, Any], request: Request):
     admin = await get_current_admin(request)
-    product_data = sanitize_product_image_field(
+    existing_product = await db.products.find_one({'id': product_id}, {'_id': 0})
+    if not existing_product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
+    product_data = sanitize_product_input_document(
         product_data,
         request=request,
-        allowed_scopes=PRODUCT_IMAGE_INPUT_SCOPES,
+        existing_product=existing_product,
     )
     product_data['updated_at'] = datetime.now(timezone.utc).isoformat()
     if product_data.get('category') == 'business':
@@ -5180,8 +5760,6 @@ async def admin_update_store_product(product_id: str, product_data: Dict[str, An
         product_data['qr_quota_granted'] = parse_non_negative_int(product_data.get('qr_quota_granted', 0), 0)
 
     result = await db.products.update_one({'id': product_id}, {'$set': product_data})
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Producto no encontrado")
 
     updated = await db.products.find_one({'id': product_id}, {'_id': 0})
     return normalize_product_document(updated, request=request)
@@ -5616,6 +6194,7 @@ async def startup_db():
                 'auto_generate_qr': True,
                 'auto_qr_profile_type': 'personal',
                 'auto_qr_sub_type': 'medico',
+                'visible_to': 'person',
                 'created_at': now,
                 'updated_at': now,
             },
@@ -5632,6 +6211,7 @@ async def startup_db():
                 'auto_generate_qr': True,
                 'auto_qr_profile_type': 'personal',
                 'auto_qr_sub_type': 'mascota',
+                'visible_to': 'person',
                 'created_at': now,
                 'updated_at': now,
             },
@@ -5648,6 +6228,7 @@ async def startup_db():
                 'auto_generate_qr': True,
                 'auto_qr_profile_type': 'personal',
                 'auto_qr_sub_type': 'vehiculo',
+                'visible_to': 'person',
                 'created_at': now,
                 'updated_at': now,
             },
@@ -5666,6 +6247,7 @@ async def startup_db():
                 'auto_generate_qr': False,
                 'auto_qr_profile_type': 'business',
                 'auto_qr_sub_type': 'tarjeta',
+                'visible_to': 'business',
                 'created_at': now,
                 'updated_at': now,
             },
@@ -5684,6 +6266,7 @@ async def startup_db():
                 'auto_generate_qr': False,
                 'auto_qr_profile_type': 'business',
                 'auto_qr_sub_type': 'tarjeta',
+                'visible_to': 'business',
                 'created_at': now,
                 'updated_at': now,
             },
@@ -5702,6 +6285,7 @@ async def startup_db():
                 'auto_generate_qr': False,
                 'auto_qr_profile_type': 'business',
                 'auto_qr_sub_type': 'tarjeta',
+                'visible_to': 'business',
                 'created_at': now,
                 'updated_at': now,
             }
@@ -5729,6 +6313,18 @@ async def startup_db():
     await db.products.update_many(
         {'item_type': 'subscription_service', 'qr_quota_granted': {'$exists': False}},
         {'$set': {'qr_quota_granted': 10, 'updated_at': datetime.now(timezone.utc).isoformat()}}
+    )
+    await db.products.update_many(
+        {'visible_to': {'$exists': False}, 'category': 'business'},
+        {'$set': {'visible_to': 'business', 'updated_at': datetime.now(timezone.utc).isoformat()}}
+    )
+    await db.products.update_many(
+        {'visible_to': {'$exists': False}, 'category': 'personal'},
+        {'$set': {'visible_to': 'person', 'updated_at': datetime.now(timezone.utc).isoformat()}}
+    )
+    await db.products.update_many(
+        {'visible_to': {'$exists': False}, 'category': {'$nin': ['business', 'personal']}},
+        {'$set': {'visible_to': 'visitor', 'updated_at': datetime.now(timezone.utc).isoformat()}}
     )
 
     # Asegurar configuración base de tienda y cupones
@@ -5898,6 +6494,10 @@ async def startup_db():
     await db.qr_profiles.update_many(
         {'action_click_count': {'$exists': False}},
         {'$set': {'action_click_count': 0}}
+    )
+    await db.qr_profiles.update_many(
+        {'public_settings': {'$exists': False}},
+        {'$set': {'public_settings': {'request_location_automatically': False, 'floating_buttons': []}}}
     )
     
     # Crear usuario admin si no existe

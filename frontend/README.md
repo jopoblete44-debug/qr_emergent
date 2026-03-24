@@ -32,6 +32,21 @@ VITE_SOCIAL_LINKEDIN_URL=
 - La experiencia de imagenes prioriza carga desde dispositivo; no se documenta uso de URLs remotas como flujo principal.
 - El backend publica archivos en `/uploads` con scope y owner validados.
 
+## Mejoras Funcionales Recientes
+
+- Correccion de resolucion de imagenes `/uploads` en productos y perfiles publicos.
+- `public_settings` por QR:
+  - `request_location_automatically`
+  - `floating_buttons` con hasta 3 acciones por tipo.
+- Dashboard `person`:
+  - sin banner de creacion manual
+  - CTA para comprar productos cuando la politica de uso lo requiere.
+- Productos con `visible_to`:
+  - la tienda y el checkout respetan la semantica de visibilidad definida por el backend.
+- Mejora de Services publica y AdminStore:
+  - menor friccion para consumo publico
+  - mejor coherencia entre catalogo visible y administracion interna.
+
 ## Auditoria de Paquetes Deprecados
 
 Auditoria realizada sobre `frontend/package.json`:

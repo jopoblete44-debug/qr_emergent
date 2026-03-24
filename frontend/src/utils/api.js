@@ -1,9 +1,45 @@
 import axios from 'axios';
 
-const BACKEND_URL = (typeof import.meta !== 'undefined' && import.meta.env)
+const RAW_BACKEND_URL = (typeof import.meta !== 'undefined' && import.meta.env)
   ? (import.meta.env.REACT_APP_BACKEND_URL || import.meta.env.VITE_BACKEND_URL)
   : process.env.REACT_APP_BACKEND_URL;
-export const API_BASE = `${BACKEND_URL}/api`;
+export const BACKEND_URL = typeof RAW_BACKEND_URL === 'string'
+  ? RAW_BACKEND_URL.replace(/\/+$/, '')
+  : '';
+export const API_BASE = BACKEND_URL ? `${BACKEND_URL}/api` : '/api';
+
+export const resolveMediaUrl = (value) => {
+  if (!value || typeof value !== 'string') return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  if (/^(data:|blob:)/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  if (/^www\./i.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+
+  const normalizedPath = trimmed.startsWith('/')
+    ? trimmed
+    : `/${trimmed.replace(/^\.?\//, '')}`;
+
+  if (BACKEND_URL) {
+    return `${BACKEND_URL}${normalizedPath}`;
+  }
+
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}${normalizedPath}`;
+  }
+
+  return normalizedPath;
+};
 
 export const api = axios.create({
   baseURL: API_BASE,

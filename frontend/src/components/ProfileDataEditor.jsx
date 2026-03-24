@@ -4,11 +4,96 @@ import { Input } from './ui/input';
 import { Textarea } from './ui/textarea';
 import { Button } from './ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { fetchProfileTypesConfig, uploadProfileImage } from '../utils/api';
+import { Switch } from './ui/switch';
+import { fetchProfileTypesConfig, resolveMediaUrl, uploadProfileImage } from '../utils/api';
 import { getEffectiveFieldType } from '../utils/imageFieldUtils';
 import { toast } from 'sonner';
+import { Globe, MapPin, MessageSquare, Phone, Star } from 'lucide-react';
 
-export const ProfileDataEditor = ({ profileType, subType, data, onChange }) => {
+const MAX_FLOATING_BUTTONS = 3;
+const DEFAULT_PUBLIC_SETTINGS = {
+  request_location_automatically: false,
+  floating_buttons: [],
+};
+const PROFILE_FLOATING_BUTTON_OPTIONS = {
+  personal: [
+    { value: 'call_contact', label: 'Llamar contacto', description: 'Llama al contacto principal del perfil', icon: Phone },
+    { value: 'send_location', label: 'Enviar ubicación', description: 'CTA para compartir o abrir la ubicación', icon: MapPin },
+    { value: 'call_emergency', label: 'Llamar emergencia', description: 'Prioriza el teléfono de emergencia', icon: Phone },
+    { value: 'whatsapp', label: 'WhatsApp', description: 'Abrir chat directo', icon: MessageSquare },
+    { value: 'share_profile', label: 'Compartir perfil', description: 'Comparte el perfil público del QR', icon: Globe },
+  ],
+  business: [
+    { value: 'send_survey', label: 'Responder encuesta', description: 'Abre formulario o encuesta del negocio', icon: MessageSquare },
+    { value: 'rate_restaurant', label: 'Calificar negocio', description: 'CTA de reseña o calificación', icon: Star },
+    { value: 'view_catalog_pdf', label: 'Ver catálogo', description: 'Abre catálogo, menú o PDF público', icon: Globe },
+    { value: 'whatsapp', label: 'WhatsApp', description: 'Abrir chat directo', icon: MessageSquare },
+    { value: 'call_business', label: 'Llamar negocio', description: 'Llama al teléfono principal del negocio', icon: Phone },
+    { value: 'website', label: 'Sitio web', description: 'Abrir web principal', icon: Globe },
+  ],
+};
+const LEGACY_FLOATING_BUTTON_ALIASES = {
+  location: 'send_location',
+  call: 'call_contact',
+  emergency_call: 'call_emergency',
+  google_review: 'rate_restaurant',
+  catalog_pdf: 'view_catalog_pdf',
+};
+
+const normalizeProfileType = (value) => (String(value || '').trim().toLowerCase() === 'business' ? 'business' : 'personal');
+
+const normalizeFloatingButtonType = (buttonType, profileType) => {
+  const normalizedProfileType = normalizeProfileType(profileType);
+  const rawType = String(buttonType || '').trim().toLowerCase();
+  if (!rawType) return null;
+
+  let mappedType = LEGACY_FLOATING_BUTTON_ALIASES[rawType] || rawType;
+
+  if (rawType === 'call') {
+    mappedType = normalizedProfileType === 'business' ? 'call_business' : 'call_contact';
+  }
+
+  const allowedTypes = new Set(
+    (PROFILE_FLOATING_BUTTON_OPTIONS[normalizedProfileType] || []).map((option) => option.value)
+  );
+
+  return allowedTypes.has(mappedType) ? mappedType : null;
+};
+
+const normalizePublicSettings = (value, profileType) => {
+  const raw = value && typeof value === 'object' ? value : {};
+  const floatingButtonSource = Array.isArray(raw.floating_buttons)
+    ? raw.floating_buttons
+    : Array.isArray(raw.floatingButtons)
+      ? raw.floatingButtons
+      : [];
+  const floatingButtons = Array.isArray(floatingButtonSource)
+    ? floatingButtonSource
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+      .map((item) => normalizeFloatingButtonType(item, profileType))
+      .filter((item, index, array) => item && array.indexOf(item) === index)
+      .slice(0, MAX_FLOATING_BUTTONS)
+    : [];
+
+  return {
+    request_location_automatically: Boolean(
+      raw.request_location_automatically ?? raw.requestLocationAutomatically
+    ),
+    floating_buttons: floatingButtons,
+  };
+};
+
+export const ProfileDataEditor = ({
+  profileType,
+  subType,
+  data,
+  onChange,
+  publicSettings = undefined,
+  onPublicSettingsChange,
+  notificationConfig = undefined,
+  onNotificationConfigChange,
+}) => {
   const [profileTypesConfig, setProfileTypesConfig] = useState(null);
   const [uploadingField, setUploadingField] = useState(null);
 
@@ -40,6 +125,47 @@ export const ProfileDataEditor = ({ profileType, subType, data, onChange }) => {
     if (!Array.isArray(templates)) return null;
     return templates.find((template) => template?.key === subType && template?.enabled !== false) || null;
   }, [profileTypesConfig, profileType, subType]);
+  const normalizedProfileType = useMemo(() => normalizeProfileType(profileType), [profileType]);
+  const availableFloatingButtonOptions = useMemo(
+    () => PROFILE_FLOATING_BUTTON_OPTIONS[normalizedProfileType] || PROFILE_FLOATING_BUTTON_OPTIONS.personal,
+    [normalizedProfileType]
+  );
+  const normalizedPublicSettings = useMemo(
+    () => normalizePublicSettings(publicSettings ?? notificationConfig ?? DEFAULT_PUBLIC_SETTINGS, normalizedProfileType),
+    [notificationConfig, normalizedProfileType, publicSettings]
+  );
+
+  const handlePublicSettingsUpdate = (patch) => {
+    const nextSettings = normalizePublicSettings({
+      ...normalizedPublicSettings,
+      ...patch,
+    }, normalizedProfileType);
+
+    if (onPublicSettingsChange) {
+      onPublicSettingsChange(nextSettings);
+      return;
+    }
+    if (onNotificationConfigChange) {
+      onNotificationConfigChange(nextSettings);
+    }
+  };
+
+  const handleToggleFloatingButton = (buttonType) => {
+    const currentButtons = normalizedPublicSettings.floating_buttons;
+    if (currentButtons.includes(buttonType)) {
+      handlePublicSettingsUpdate({
+        floating_buttons: currentButtons.filter((item) => item !== buttonType),
+      });
+      return;
+    }
+    if (currentButtons.length >= MAX_FLOATING_BUTTONS) {
+      toast.error(`Puedes seleccionar hasta ${MAX_FLOATING_BUTTONS} botones flotantes`);
+      return;
+    }
+    handlePublicSettingsUpdate({
+      floating_buttons: [...currentButtons, buttonType],
+    });
+  };
 
   const getDynamicFieldValue = (field) => {
     if (!field) return '';
@@ -75,33 +201,94 @@ export const ProfileDataEditor = ({ profileType, subType, data, onChange }) => {
     label,
     value,
     onValueChange,
-  }) => (
-    <div className="space-y-2">
-      <Label htmlFor={fieldKey}>{label}</Label>
-      <Input
-        type="file"
-        accept="image/*"
-        capture="environment"
-        onChange={(e) => handleUploadImage(fieldKey, e.target.files?.[0], onValueChange)}
-      />
-      <p className="text-xs text-muted-foreground">
-        Solo se permiten imágenes subidas desde tu dispositivo.
-      </p>
-      {uploadingField === fieldKey && (
-        <p className="text-xs text-muted-foreground">Subiendo imagen...</p>
-      )}
-      {value && (
-        <div className="space-y-2">
-          <img
-            src={value}
-            alt={label}
-            className="w-28 h-28 rounded-md object-cover border border-border"
-          />
-          <Button type="button" variant="outline" size="sm" onClick={() => onValueChange('')}>
-            Quitar imagen
-          </Button>
+  }) => {
+    const previewUrl = resolveMediaUrl(value);
+
+    return (
+      <div className="space-y-2">
+        <Label htmlFor={fieldKey}>{label}</Label>
+        <Input
+          type="file"
+          accept="image/*"
+          capture="environment"
+          onChange={(e) => handleUploadImage(fieldKey, e.target.files?.[0], onValueChange)}
+        />
+        <p className="text-xs text-muted-foreground">
+          Solo se permiten imágenes subidas desde tu dispositivo.
+        </p>
+        {uploadingField === fieldKey && (
+          <p className="text-xs text-muted-foreground">Subiendo imagen...</p>
+        )}
+        {previewUrl && (
+          <div className="space-y-2">
+            <img
+              src={previewUrl}
+              alt={label}
+              className="w-28 h-28 rounded-md object-cover border border-border"
+            />
+            <Button type="button" variant="outline" size="sm" onClick={() => onValueChange('')}>
+              Quitar imagen
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderQrSettingsSection = () => (
+    <div className="space-y-4 rounded-xl border border-border/70 bg-muted/20 p-4">
+      <div className="space-y-1">
+        <h4 className="text-sm font-semibold text-foreground">Configuración pública del QR</h4>
+        <p className="text-xs text-muted-foreground">
+          Definí comportamiento de ubicación y hasta {MAX_FLOATING_BUTTONS} botones flotantes para la vista pública.
+        </p>
+      </div>
+
+      <div className="flex items-start justify-between gap-4 rounded-lg border border-border/60 bg-background px-3 py-3">
+        <div className="space-y-1">
+          <Label htmlFor="request-location-automatically" className="text-sm font-medium">
+            Solicitar ubicación automáticamente
+          </Label>
+          <p className="text-xs text-muted-foreground">
+            Se intentará pedir geolocalización al abrir el perfil público, de forma no intrusiva.
+          </p>
         </div>
-      )}
+        <Switch
+          id="request-location-automatically"
+          checked={normalizedPublicSettings.request_location_automatically}
+          onCheckedChange={(checked) => handlePublicSettingsUpdate({ request_location_automatically: checked })}
+        />
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <Label className="text-sm font-medium">Botones flotantes</Label>
+          <span className="text-xs text-muted-foreground">
+            {normalizedPublicSettings.floating_buttons.length}/{MAX_FLOATING_BUTTONS} seleccionados
+          </span>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {availableFloatingButtonOptions.map((option) => {
+            const isActive = normalizedPublicSettings.floating_buttons.includes(option.value);
+            const Icon = option.icon;
+            return (
+              <Button
+                key={option.value}
+                type="button"
+                variant={isActive ? 'default' : 'outline'}
+                className="h-auto items-start justify-start px-3 py-3 text-left"
+                onClick={() => handleToggleFloatingButton(option.value)}
+              >
+                <Icon className="mr-2 mt-0.5 h-4 w-4 shrink-0" />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium">{option.label}</span>
+                  <span className="block text-xs opacity-80">{option.description}</span>
+                </span>
+              </Button>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 
@@ -1135,50 +1322,72 @@ export const ProfileDataEditor = ({ profileType, subType, data, onChange }) => {
     </div>
   );
 
-  // Renderizar campos según el tipo
-  if (dynamicTemplate?.sections?.length) {
-    return renderDynamicTemplateForm();
-  }
+  let profileFields = null;
 
-  if (profileType === 'personal') {
+  if (dynamicTemplate?.sections?.length) {
+    profileFields = renderDynamicTemplateForm();
+  } else if (profileType === 'personal') {
     switch (subType) {
       case 'medico':
-        return renderMedicalFields();
+        profileFields = renderMedicalFields();
+        break;
       case 'mascota':
-        return renderPetFields();
+        profileFields = renderPetFields();
+        break;
       case 'vehiculo':
-        return renderVehicleFields();
+        profileFields = renderVehicleFields();
+        break;
       case 'nino':
-        return renderElderlyFields();
+        profileFields = renderElderlyFields();
+        break;
       default:
-        return renderGenericFields();
+        profileFields = renderGenericFields();
+        break;
     }
   } else if (profileType === 'business') {
     switch (subType) {
       case 'restaurante':
-        return renderRestaurantFields();
+        profileFields = renderRestaurantFields();
+        break;
       case 'hotel':
-        return renderHotelFields();
+        profileFields = renderHotelFields();
+        break;
       case 'wifi':
-        return renderWiFiFields();
+        profileFields = renderWiFiFields();
+        break;
       case 'tarjeta':
-        return renderBusinessCardFields();
+        profileFields = renderBusinessCardFields();
+        break;
       case 'catalogo':
-        return renderCatalogFields();
+        profileFields = renderCatalogFields();
+        break;
       case 'turismo':
-        return renderTourismFields();
+        profileFields = renderTourismFields();
+        break;
       case 'redes':
-        return renderSocialLinksFields();
+        profileFields = renderSocialLinksFields();
+        break;
       case 'evento':
-        return renderEventFields();
+        profileFields = renderEventFields();
+        break;
       case 'checkin':
-        return renderCheckinFields();
+        profileFields = renderCheckinFields();
+        break;
       case 'encuesta':
-        return renderSurveyFields();
+        profileFields = renderSurveyFields();
+        break;
       default:
-        return renderGenericFields();
+        profileFields = renderGenericFields();
+        break;
     }
+  } else {
+    profileFields = renderGenericFields();
   }
 
-  return renderGenericFields();
+  return (
+    <div className="space-y-6">
+      {renderQrSettingsSection()}
+      {profileFields}
+    </div>
+  );
 };

@@ -202,3 +202,18 @@ Fuentes de inspiracion (web):
   - https://www.the-qrcode-generator.com/blog/qr-code-examples
 - Catalogo de regiones/comunas de Chile usado para envios:
   - https://gist.githubusercontent.com/juanbrujo/0fd2f4d126b3ce5a95a7dd1f28b3d8dd/raw/b8575eb82dce974fd2647f46819a7568278396bd/comunas-regiones.json
+
+## 13) Correcciones y Ajustes Recientes
+
+- Correccion de imagenes `/uploads` en productos y perfiles publicos para que las referencias de archivos queden consistentes en ambos flujos.
+- Contrato `public_settings` por QR actualizado con:
+  - `request_location_automatically`
+  - `floating_buttons` con un maximo de 3 botones, validados por tipo.
+- Dashboard `person` ajustado:
+  - sin banner de creacion manual
+  - con CTA de compra de productos como camino principal.
+- Visibilidad de productos basada en `visible_to`:
+  - la tienda y el checkout interpretan la semantica de exposicion del producto.
+- Mejora de Services publica y AdminStore:
+  - mejor presentacion del catalogo
+  - mejor correspondencia entre lo que se publica y lo que se administra.

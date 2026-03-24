@@ -170,6 +170,22 @@ React 19 + Vite (SPA) --> FastAPI (REST API) --> MongoDB
 - El backend guarda esos archivos bajo `/uploads/<scope>/<owner>/...` y valida scope/owner antes de aceptar la referencia.
 - Las previews visuales del editor admin pueden usar placeholders locales/data URI para demostrar layout sin depender de terceros.
 
+## Mejoras Funcionales Recientes
+
+- Correccion de imagenes `/uploads` en productos y perfiles publicos, para que la resolucion de archivos respete el scope/owner esperado.
+- Contrato `public_settings` por QR actualizado:
+  - `request_location_automatically`
+  - `floating_buttons` con maximo 3 acciones, limitadas por tipo.
+- Dashboard de tipo `person` simplificado:
+  - sin banner de creacion manual
+  - con CTA directo para comprar productos cuando corresponde.
+- Visibilidad de productos basada en `visible_to`:
+  - define alcance en shop y checkout
+  - evita exponer items fuera de su contexto permitido.
+- Mejora de la experiencia publica de Services y del AdminStore:
+  - catalogo mas consistente
+  - mejor alineacion entre lo visible al cliente y lo administrable desde el panel.
+
 ## Rutas Publicas Y Navegacion
 
 - Public pages disponibles: `/about`, `/contact` y `/faq`.
