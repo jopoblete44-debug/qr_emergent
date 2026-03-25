@@ -7,7 +7,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Slider } from '../components/ui/slider';
-import { API_BASE } from '../utils/api';
+import { API_BASE, getQrDownloadExtension } from '../utils/api';
 import { toast } from 'sonner';
 import { ArrowLeft, Download, RotateCcw } from 'lucide-react';
 
@@ -92,10 +92,11 @@ export const QRCustomizePage = () => {
         { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } }
       );
       const blob = await response.blob();
+      const extension = getQrDownloadExtension(response.headers.get('content-type'));
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `qr-${profileHash}-custom.png`;
+      a.download = `qr-${profileHash}-custom.${extension}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);

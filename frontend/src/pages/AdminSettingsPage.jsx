@@ -9,8 +9,65 @@ import { Textarea } from '../components/ui/textarea';
 import { Switch } from '../components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { toast } from 'sonner';
-import { Save, Settings, Bell, Globe, CreditCard, Shield, Store, TrendingUp, Truck } from 'lucide-react';
+import { Save, Settings, Bell, Globe, CreditCard, Store, TrendingUp, Truck } from 'lucide-react';
 import { fetchAdminSettings, updateAdminSettings, seedFreeCouponFromSettings, uploadImageFile } from '../utils/api';
+
+const DEFAULT_QR_GENERATION_SETTINGS = {
+  output_format: 'svg',
+  complexity_mode: 'balanced',
+  error_correction: 'M',
+  force_version: 0,
+  module_size: 10,
+  quiet_zone_modules: 4,
+  data_optimization: 20,
+  hash_visible: true,
+  hash_position: 'bottom',
+  hash_prefix: 'ID:',
+  hash_font_size: 16,
+  hash_padding: 12,
+  svg_factory: 'path',
+};
+
+const normalizeQrGenerationSettings = (rawSettings) => {
+  const source = rawSettings && typeof rawSettings === 'object' ? rawSettings : {};
+  const outputFormat = ['png', 'svg'].includes(String(source.output_format || '').toLowerCase())
+    ? String(source.output_format).toLowerCase()
+    : DEFAULT_QR_GENERATION_SETTINGS.output_format;
+  const complexityMode = ['compact', 'balanced', 'redundant', 'maximum'].includes(String(source.complexity_mode || '').toLowerCase())
+    ? String(source.complexity_mode).toLowerCase()
+    : DEFAULT_QR_GENERATION_SETTINGS.complexity_mode;
+  const errorCorrection = ['L', 'M', 'Q', 'H'].includes(String(source.error_correction || '').toUpperCase())
+    ? String(source.error_correction).toUpperCase()
+    : DEFAULT_QR_GENERATION_SETTINGS.error_correction;
+  const hashPosition = ['top', 'bottom'].includes(String(source.hash_position || '').toLowerCase())
+    ? String(source.hash_position).toLowerCase()
+    : DEFAULT_QR_GENERATION_SETTINGS.hash_position;
+  const svgFactory = ['path', 'rect'].includes(String(source.svg_factory || '').toLowerCase())
+    ? String(source.svg_factory).toLowerCase()
+    : DEFAULT_QR_GENERATION_SETTINGS.svg_factory;
+
+  const clampInt = (value, min, max, fallback) => {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isNaN(parsed)) return fallback;
+    return Math.min(max, Math.max(min, parsed));
+  };
+
+  return {
+    output_format: outputFormat,
+    complexity_mode: complexityMode,
+    error_correction: errorCorrection,
+    force_version: clampInt(source.force_version, 0, 40, DEFAULT_QR_GENERATION_SETTINGS.force_version),
+    module_size: clampInt(source.module_size, 4, 40, DEFAULT_QR_GENERATION_SETTINGS.module_size),
+    quiet_zone_modules: clampInt(source.quiet_zone_modules, 0, 20, DEFAULT_QR_GENERATION_SETTINGS.quiet_zone_modules),
+    data_optimization: clampInt(source.data_optimization, 0, 40, DEFAULT_QR_GENERATION_SETTINGS.data_optimization),
+    hash_visible: Boolean(source.hash_visible ?? DEFAULT_QR_GENERATION_SETTINGS.hash_visible),
+    hash_position: hashPosition,
+    hash_prefix: String(source.hash_prefix ?? DEFAULT_QR_GENERATION_SETTINGS.hash_prefix).slice(0, 32),
+    hash_font_size: clampInt(source.hash_font_size, 10, 40, DEFAULT_QR_GENERATION_SETTINGS.hash_font_size),
+    hash_padding: clampInt(source.hash_padding, 4, 48, DEFAULT_QR_GENERATION_SETTINGS.hash_padding),
+    svg_factory: svgFactory,
+  };
+};
 
 export const AdminSettingsPage = () => {
   const [settings, setSettings] = useState({
@@ -23,23 +80,16 @@ export const AdminSettingsPage = () => {
     seo_keywords: 'QR, perfiles QR, tarjetas QR, marketing QR',
     seo_og_image_url: '',
     seo_indexing_enabled: true,
-    contact_email: '',
-    contact_phone: '',
     default_qr_expiration_days: 365,
     max_qr_per_person: 5,
     max_qr_per_business: 50,
     allow_person_create_qr: false,
     allow_business_create_qr: true,
+    qr_generation: { ...DEFAULT_QR_GENERATION_SETTINGS },
     enable_notifications_email: false,
-    enable_notifications_whatsapp: false,
-    enable_notifications_telegram: false,
     notification_email_sender: '',
-    whatsapp_api_key: '',
-    telegram_bot_token: '',
     enable_payments: false,
     currency: 'CLP',
-    mercadopago_public_key: '',
-    mercadopago_access_token: '',
     enable_store: true,
     enable_coupons: true,
     default_shipping_cost: 2990,
@@ -80,10 +130,6 @@ export const AdminSettingsPage = () => {
     enable_lead_notifications: false,
     lead_notification_emails: '',
     lead_notification_webhook_url: '',
-    auto_language_detection: false,
-    default_language: 'es',
-    maintenance_mode: false,
-    maintenance_message: 'Estamos en mantenimiento. Volvemos pronto.',
   });
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -101,6 +147,7 @@ export const AdminSettingsPage = () => {
           ...prev,
           ...data,
           shipping_regions: Array.isArray(data.shipping_regions) ? data.shipping_regions : prev.shipping_regions,
+          qr_generation: normalizeQrGenerationSettings(data.qr_generation ?? prev.qr_generation),
         }));
       }
     } catch (error) {
@@ -113,7 +160,10 @@ export const AdminSettingsPage = () => {
   const handleSave = async () => {
     try {
       setSaving(true);
-      await updateAdminSettings(settings);
+      await updateAdminSettings({
+        ...settings,
+        qr_generation: normalizeQrGenerationSettings(settings.qr_generation),
+      });
       toast.success('Configuración guardada');
     } catch (error) {
       toast.error('Error al guardar configuración');
@@ -124,6 +174,16 @@ export const AdminSettingsPage = () => {
 
   const updateSetting = (key, value) => {
     setSettings(prev => ({ ...prev, [key]: value }));
+  };
+
+  const updateQrGenerationSetting = (key, value) => {
+    setSettings((prev) => ({
+      ...prev,
+      qr_generation: normalizeQrGenerationSettings({
+        ...(prev.qr_generation || DEFAULT_QR_GENERATION_SETTINGS),
+        [key]: value,
+      }),
+    }));
   };
 
   const handleUploadSettingImage = async (key, file, scope) => {
@@ -240,30 +300,19 @@ export const AdminSettingsPage = () => {
               <TabsTrigger value="store">Tienda</TabsTrigger>
               <TabsTrigger value="shipping">Envíos</TabsTrigger>
               <TabsTrigger value="growth">Growth</TabsTrigger>
-              <TabsTrigger value="advanced">Avanzado</TabsTrigger>
             </TabsList>
 
             <TabsContent value="general" className="space-y-4 mt-4">
               <Card>
                 <CardHeader><CardTitle className="text-base flex items-center gap-2"><Globe className="h-4 w-4" />Información del Sitio</CardTitle></CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label>Nombre del Sitio</Label>
-                      <Input value={settings.site_name} onChange={(e) => updateSetting('site_name', e.target.value)} data-testid="setting-site-name" />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Email de Contacto</Label>
-                      <Input value={settings.contact_email} onChange={(e) => updateSetting('contact_email', e.target.value)} data-testid="setting-contact-email" />
-                    </div>
+                  <div className="space-y-2">
+                    <Label>Nombre del Sitio</Label>
+                    <Input value={settings.site_name} onChange={(e) => updateSetting('site_name', e.target.value)} data-testid="setting-site-name" />
                   </div>
                   <div className="space-y-2">
                     <Label>Descripción</Label>
                     <Textarea value={settings.site_description} onChange={(e) => updateSetting('site_description', e.target.value)} rows={2} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Teléfono de Contacto</Label>
-                    <Input value={settings.contact_phone} onChange={(e) => updateSetting('contact_phone', e.target.value)} />
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
@@ -359,15 +408,15 @@ export const AdminSettingsPage = () => {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="space-y-2">
                       <Label>Expiración por defecto (días)</Label>
-                      <Input type="number" value={settings.default_qr_expiration_days} onChange={(e) => updateSetting('default_qr_expiration_days', parseInt(e.target.value))} />
+                      <Input type="number" value={settings.default_qr_expiration_days} onChange={(e) => updateSetting('default_qr_expiration_days', Number.parseInt(e.target.value || '365', 10))} />
                     </div>
                     <div className="space-y-2">
                       <Label>Máx. QRs por Persona</Label>
-                      <Input type="number" value={settings.max_qr_per_person} onChange={(e) => updateSetting('max_qr_per_person', parseInt(e.target.value))} />
+                      <Input type="number" value={settings.max_qr_per_person} onChange={(e) => updateSetting('max_qr_per_person', Number.parseInt(e.target.value || '0', 10))} />
                     </div>
                     <div className="space-y-2">
                       <Label>Máx. QRs por Empresa</Label>
-                      <Input type="number" value={settings.max_qr_per_business} onChange={(e) => updateSetting('max_qr_per_business', parseInt(e.target.value))} />
+                      <Input type="number" value={settings.max_qr_per_business} onChange={(e) => updateSetting('max_qr_per_business', Number.parseInt(e.target.value || '0', 10))} />
                     </div>
                   </div>
                   <div className="space-y-3 pt-2">
@@ -388,17 +437,180 @@ export const AdminSettingsPage = () => {
                   </div>
                 </CardContent>
               </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Motor de generación QR (global)</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <p className="text-xs text-muted-foreground">
+                    Esta configuración aplica a TODOS los QR de personas y empresas (incluye descargas de clientes y admin).
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <Label>Formato de salida</Label>
+                      <select
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        value={settings.qr_generation?.output_format || 'svg'}
+                        onChange={(e) => updateQrGenerationSetting('output_format', e.target.value)}
+                      >
+                        <option value="svg">SVG (recomendado)</option>
+                        <option value="png">PNG</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Complejidad</Label>
+                      <select
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        value={settings.qr_generation?.complexity_mode || 'balanced'}
+                        onChange={(e) => updateQrGenerationSetting('complexity_mode', e.target.value)}
+                      >
+                        <option value="compact">Compacta (L)</option>
+                        <option value="balanced">Balanceada (M)</option>
+                        <option value="redundant">Redundante (Q)</option>
+                        <option value="maximum">Máxima (H)</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Corrección de errores</Label>
+                      <select
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        value={settings.qr_generation?.error_correction || 'M'}
+                        onChange={(e) => updateQrGenerationSetting('error_correction', e.target.value)}
+                      >
+                        <option value="L">L (7%)</option>
+                        <option value="M">M (15%)</option>
+                        <option value="Q">Q (25%)</option>
+                        <option value="H">H (30%)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="space-y-2">
+                      <Label>Versión fija (0 = auto)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={40}
+                        value={settings.qr_generation?.force_version ?? 0}
+                        onChange={(e) => updateQrGenerationSetting('force_version', Number.parseInt(e.target.value || '0', 10))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Tamaño módulo</Label>
+                      <Input
+                        type="number"
+                        min={4}
+                        max={40}
+                        value={settings.qr_generation?.module_size ?? 10}
+                        onChange={(e) => updateQrGenerationSetting('module_size', Number.parseInt(e.target.value || '10', 10))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Margen (quiet zone)</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={20}
+                        value={settings.qr_generation?.quiet_zone_modules ?? 4}
+                        onChange={(e) => updateQrGenerationSetting('quiet_zone_modules', Number.parseInt(e.target.value || '4', 10))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Optimización de datos</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={40}
+                        value={settings.qr_generation?.data_optimization ?? 20}
+                        onChange={(e) => updateQrGenerationSetting('data_optimization', Number.parseInt(e.target.value || '20', 10))}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border border-border/70 bg-muted/20 p-3 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <Label>Mostrar hash impreso</Label>
+                        <p className="text-xs text-muted-foreground">Controla si el identificador del QR va visible en la imagen exportada.</p>
+                      </div>
+                      <Switch
+                        checked={!!settings.qr_generation?.hash_visible}
+                        onCheckedChange={(v) => updateQrGenerationSetting('hash_visible', v)}
+                      />
+                    </div>
+                    {!!settings.qr_generation?.hash_visible && (
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div className="space-y-2">
+                          <Label>Posición hash</Label>
+                          <select
+                            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                            value={settings.qr_generation?.hash_position || 'bottom'}
+                            onChange={(e) => updateQrGenerationSetting('hash_position', e.target.value)}
+                          >
+                            <option value="bottom">Debajo</option>
+                            <option value="top">Arriba</option>
+                          </select>
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Prefijo hash</Label>
+                          <Input
+                            value={settings.qr_generation?.hash_prefix ?? 'ID:'}
+                            onChange={(e) => updateQrGenerationSetting('hash_prefix', e.target.value)}
+                            placeholder="ID:"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Tamaño fuente hash</Label>
+                          <Input
+                            type="number"
+                            min={10}
+                            max={40}
+                            value={settings.qr_generation?.hash_font_size ?? 16}
+                            onChange={(e) => updateQrGenerationSetting('hash_font_size', Number.parseInt(e.target.value || '16', 10))}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Padding hash</Label>
+                          <Input
+                            type="number"
+                            min={4}
+                            max={48}
+                            value={settings.qr_generation?.hash_padding ?? 12}
+                            onChange={(e) => updateQrGenerationSetting('hash_padding', Number.parseInt(e.target.value || '12', 10))}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {settings.qr_generation?.output_format === 'svg' && (
+                    <div className="space-y-2">
+                      <Label>Modo SVG</Label>
+                      <select
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm md:max-w-sm"
+                        value={settings.qr_generation?.svg_factory || 'path'}
+                        onChange={(e) => updateQrGenerationSetting('svg_factory', e.target.value)}
+                      >
+                        <option value="path">Path (más liviano)</option>
+                        <option value="rect">Rect (más compatible)</option>
+                      </select>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             </TabsContent>
 
             <TabsContent value="notifications" className="space-y-4 mt-4">
               <Card>
-                <CardHeader><CardTitle className="text-base flex items-center gap-2"><Bell className="h-4 w-4" />Canales de Notificación</CardTitle></CardHeader>
+                <CardHeader><CardTitle className="text-base flex items-center gap-2"><Bell className="h-4 w-4" />Notificaciones operativas</CardTitle></CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="space-y-3">
+                  <div className="space-y-3 border rounded-lg p-3">
                     <div className="flex items-center justify-between p-3 border rounded-lg">
                       <div>
                         <Label>Email</Label>
-                        <p className="text-xs text-muted-foreground">Notificaciones por correo electrónico</p>
+                        <p className="text-xs text-muted-foreground">Canal de envío de notificaciones por correo (leads y alertas).</p>
                       </div>
                       <Switch checked={settings.enable_notifications_email} onCheckedChange={(v) => updateSetting('enable_notifications_email', v)} />
                     </div>
@@ -408,32 +620,9 @@ export const AdminSettingsPage = () => {
                         <Input value={settings.notification_email_sender} onChange={(e) => updateSetting('notification_email_sender', e.target.value)} placeholder="noreply@tudominio.com" />
                       </div>
                     )}
-                    <div className="flex items-center justify-between p-3 border rounded-lg">
-                      <div>
-                        <Label>WhatsApp</Label>
-                        <p className="text-xs text-muted-foreground">Notificaciones vía WhatsApp Business API</p>
-                      </div>
-                      <Switch checked={settings.enable_notifications_whatsapp} onCheckedChange={(v) => updateSetting('enable_notifications_whatsapp', v)} />
-                    </div>
-                    {settings.enable_notifications_whatsapp && (
-                      <div className="space-y-2 pl-4">
-                        <Label>API Key de WhatsApp</Label>
-                        <Input type="password" value={settings.whatsapp_api_key} onChange={(e) => updateSetting('whatsapp_api_key', e.target.value)} />
-                      </div>
-                    )}
-                    <div className="flex items-center justify-between p-3 border rounded-lg">
-                      <div>
-                        <Label>Telegram</Label>
-                        <p className="text-xs text-muted-foreground">Notificaciones vía Bot de Telegram</p>
-                      </div>
-                      <Switch checked={settings.enable_notifications_telegram} onCheckedChange={(v) => updateSetting('enable_notifications_telegram', v)} />
-                    </div>
-                    {settings.enable_notifications_telegram && (
-                      <div className="space-y-2 pl-4">
-                        <Label>Token del Bot de Telegram</Label>
-                        <Input type="password" value={settings.telegram_bot_token} onChange={(e) => updateSetting('telegram_bot_token', e.target.value)} />
-                      </div>
-                    )}
+                    <p className="text-xs text-muted-foreground">
+                      Se removieron opciones de WhatsApp/Telegram porque no tenían implementación real en backend.
+                    </p>
                   </div>
                 </CardContent>
               </Card>
@@ -450,22 +639,14 @@ export const AdminSettingsPage = () => {
                     </div>
                     <Switch checked={settings.enable_payments} onCheckedChange={(v) => updateSetting('enable_payments', v)} />
                   </div>
-                  {settings.enable_payments && (
-                    <div className="space-y-4 pt-2">
-                      <div className="space-y-2">
-                        <Label>Moneda</Label>
-                        <Input value={settings.currency} onChange={(e) => updateSetting('currency', e.target.value)} />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>MercadoPago Public Key</Label>
-                        <Input value={settings.mercadopago_public_key} onChange={(e) => updateSetting('mercadopago_public_key', e.target.value)} />
-                      </div>
-                      <div className="space-y-2">
-                        <Label>MercadoPago Access Token</Label>
-                        <Input type="password" value={settings.mercadopago_access_token} onChange={(e) => updateSetting('mercadopago_access_token', e.target.value)} />
-                      </div>
-                    </div>
-                  )}
+                  <div className="space-y-2">
+                    <Label>Moneda</Label>
+                    <Input value={settings.currency} onChange={(e) => updateSetting('currency', e.target.value)} />
+                  </div>
+                  <div className="rounded-lg border p-3 text-xs text-muted-foreground">
+                    Las credenciales de MercadoPago se gestionan por variables de entorno del backend.
+                    Este panel controla disponibilidad funcional del checkout, no secretos.
+                  </div>
                 </CardContent>
               </Card>
             </TabsContent>
@@ -959,37 +1140,6 @@ export const AdminSettingsPage = () => {
               </Card>
             </TabsContent>
 
-            <TabsContent value="advanced" className="space-y-4 mt-4">
-              <Card>
-                <CardHeader><CardTitle className="text-base flex items-center gap-2"><Shield className="h-4 w-4" />Configuración Avanzada</CardTitle></CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <Label>Detección Automática de Idioma</Label>
-                      <p className="text-xs text-muted-foreground">Mostrar perfiles públicos en el idioma del dispositivo</p>
-                    </div>
-                    <Switch checked={settings.auto_language_detection} onCheckedChange={(v) => updateSetting('auto_language_detection', v)} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Idioma por Defecto</Label>
-                    <Input value={settings.default_language} onChange={(e) => updateSetting('default_language', e.target.value)} />
-                  </div>
-                  <div className="flex items-center justify-between border-t pt-4">
-                    <div>
-                      <Label className="text-destructive">Modo Mantenimiento</Label>
-                      <p className="text-xs text-muted-foreground">Bloquea el acceso público al sitio</p>
-                    </div>
-                    <Switch checked={settings.maintenance_mode} onCheckedChange={(v) => updateSetting('maintenance_mode', v)} />
-                  </div>
-                  {settings.maintenance_mode && (
-                    <div className="space-y-2">
-                      <Label>Mensaje de Mantenimiento</Label>
-                      <Textarea value={settings.maintenance_message} onChange={(e) => updateSetting('maintenance_message', e.target.value)} />
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
           </Tabs>
         </div>
       </AdminLayout>

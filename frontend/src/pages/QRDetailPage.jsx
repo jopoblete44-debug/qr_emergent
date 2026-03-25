@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
-import { fetchQRProfileDetails, updateQRStatus, deleteQRProfile, API_BASE } from '../utils/api';
+import { fetchQRProfileDetails, updateQRStatus, deleteQRProfile, API_BASE, getQrDownloadExtension } from '../utils/api';
 import { toast } from 'sonner';
 import {
   ArrowLeft, ExternalLink, Download, Palette, Play, Pause, Trash2, Edit,
@@ -68,10 +68,11 @@ export const QRDetailPage = () => {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` },
       });
       const blob = await response.blob();
+      const extension = getQrDownloadExtension(response.headers.get('content-type'));
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `qr-${data.profile.hash}.png`;
+      a.download = `qr-${data.profile.hash}.${extension}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);

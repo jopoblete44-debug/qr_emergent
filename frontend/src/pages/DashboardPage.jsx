@@ -22,7 +22,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { API_BASE } from '../utils/api';
+import { API_BASE, getQrDownloadExtension } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 import { Link } from 'react-router-dom';
 
@@ -328,10 +328,11 @@ export const DashboardPage = () => {
         },
       });
       const blob = await response.blob();
+      const extension = getQrDownloadExtension(response.headers.get('content-type'));
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `qr-${profile.hash}.png`;
+      a.download = `qr-${profile.hash}.${extension}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);

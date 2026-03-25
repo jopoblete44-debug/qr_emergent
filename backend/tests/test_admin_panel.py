@@ -383,7 +383,7 @@ class TestAdminQRDownload:
         response = requests.get(f"{BASE_URL}/api/admin/qr-profiles/{profile_id}/download-qr",
             headers={"Authorization": f"Bearer {admin_token}"})
         assert response.status_code == 200
-        assert response.headers.get("content-type") == "image/png"
+        assert response.headers.get("content-type") in {"image/png", "image/svg+xml"}
         assert len(response.content) > 0
         
         print(f"✓ Downloaded QR for profile {profile_id}: {len(response.content)} bytes")

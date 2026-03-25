@@ -120,7 +120,7 @@ React 19 + Vite (SPA) --> FastAPI (REST API) --> MongoDB
 
 - Registro/Login (persona y empresa)
 - Creacion y gestion de perfiles QR (catalogo dinamico ampliado con +30 subtipos entre persona/empresa)
-- Generacion de codigos QR personalizables (colores, tamano)
+- Generacion de codigos QR con motor configurable globalmente (SVG/PNG, complejidad, version, zona quieta, hash visible y posicionable)
 - Perfiles publicos optimizados para movil
 - Seguimiento de escaneos con geolocalizacion
 - Panel de administracion completo con 6 secciones
@@ -172,7 +172,11 @@ React 19 + Vite (SPA) --> FastAPI (REST API) --> MongoDB
   - mostrar/ocultar banner negocio
   - mostrar/ocultar formulario de contacto
   - mostrar/ocultar boton manual de ubicacion (persona)
+  - mostrar/ocultar bloque de mapa por plantilla
+  - mostrar/ocultar highlights de cabecera
+  - estilo visual de tarjeta por plantilla (elegante / atrevido / glass)
   - foto superior destacada opcional y forma configurable (circular/redondeada/cuadrada)
+  - nuevos campos de ubicacion para negocios (direccion de mapa, latitud/longitud, link Google Maps, area de cobertura)
 
 ## Politica De Imagenes Y UX Frontend
 

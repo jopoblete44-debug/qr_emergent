@@ -15,7 +15,6 @@ Secciones principales:
 - Tienda
 - Envios
 - Growth
-- Avanzado
 
 Tambien incluye nuevas opciones de marca/SEO:
 - logo y favicon
@@ -29,10 +28,15 @@ Campos clave:
 - `max_qr_per_business`
 - `allow_person_create_qr`
 - `allow_business_create_qr`
+- `qr_generation.output_format` (`svg` recomendado)
+- `qr_generation.complexity_mode`
+- `qr_generation.error_correction`
+- `qr_generation.hash_visible` / `hash_position` / `hash_prefix`
 
 Comportamiento:
 - Si desactivas `allow_*_create_qr`, ese tipo de usuario no puede crear QR manualmente.
 - Para empresas, podran crear solo con cupos de suscripcion (`qr_quota_balance`).
+- La configuracion `qr_generation` afecta todas las descargas QR (cliente y admin).
 
 ## 3) Tienda y Suscripciones
 
@@ -138,6 +142,11 @@ Capacidades clave:
 - editar secciones, campos, iconos, colores y descripciones.
 - usar tipo de campo `image` para fotos, logos, avatar y banners.
 - vista previa movil en tiempo real.
+- configurar `display_options` por plantilla:
+  - estilo visual (`elegant`, `bold`, `glass`)
+  - mostrar/ocultar bloque de mapa
+  - mostrar/ocultar highlights de cabecera
+  - controles ya existentes (banner, lead form, botones flotantes, etc.)
 
 Plantillas destacadas:
 - Persona: medico, mascota, vehiculo, nino/adulto mayor (con soporte de foto).

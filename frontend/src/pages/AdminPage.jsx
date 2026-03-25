@@ -12,7 +12,7 @@ import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Eye, Download, Edit, Trash2, Play, Pause, Search, Filter, ExternalLink } from 'lucide-react';
-import { API_BASE } from '../utils/api';
+import { API_BASE, getQrDownloadExtension } from '../utils/api';
 
 export const AdminPage = () => {
   const [users, setUsers] = useState([]);
@@ -146,10 +146,11 @@ export const AdminPage = () => {
         },
       });
       const blob = await response.blob();
+      const extension = getQrDownloadExtension(response.headers.get('content-type'));
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `qr-${profile.hash}.png`;
+      a.download = `qr-${profile.hash}.${extension}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);

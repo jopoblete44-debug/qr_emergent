@@ -44,6 +44,9 @@ const DEFAULT_TEMPLATE_DISPLAY_OPTIONS = {
   show_floating_actions: true,
   show_lead_form: true,
   show_manual_location_button: true,
+  show_map_section: true,
+  show_highlights: true,
+  card_style: 'elegant',
 };
 
 const normalizeTemplatePublicSettings = (rawValue, category) => {
@@ -86,6 +89,8 @@ const normalizeTemplatePublicSettings = (rawValue, category) => {
 const normalizeTemplateDisplayOptions = (rawValue, category) => {
   const raw = rawValue && typeof rawValue === 'object' ? rawValue : {};
   const normalizedCategory = category === 'business' ? 'business' : 'personal';
+  const cardStyleRaw = String(raw.card_style ?? raw.cardStyle ?? DEFAULT_TEMPLATE_DISPLAY_OPTIONS.card_style).trim().toLowerCase();
+  const cardStyle = ['elegant', 'bold', 'glass'].includes(cardStyleRaw) ? cardStyleRaw : DEFAULT_TEMPLATE_DISPLAY_OPTIONS.card_style;
   return {
     show_profile_type_badge: Boolean(raw.show_profile_type_badge ?? raw.showProfileTypeBadge ?? DEFAULT_TEMPLATE_DISPLAY_OPTIONS.show_profile_type_badge),
     show_business_banner: normalizedCategory === 'business'
@@ -96,6 +101,13 @@ const normalizeTemplateDisplayOptions = (rawValue, category) => {
     show_manual_location_button: normalizedCategory === 'personal'
       ? Boolean(raw.show_manual_location_button ?? raw.showManualLocationButton ?? DEFAULT_TEMPLATE_DISPLAY_OPTIONS.show_manual_location_button)
       : false,
+    show_map_section: Boolean(
+      raw.show_map_section
+      ?? raw.showMapSection
+      ?? (normalizedCategory === 'business' ? true : false)
+    ),
+    show_highlights: Boolean(raw.show_highlights ?? raw.showHighlights ?? DEFAULT_TEMPLATE_DISPLAY_OPTIONS.show_highlights),
+    card_style: cardStyle,
   };
 };
 
@@ -744,6 +756,22 @@ export const AdminProfileEditorPage = () => {
 
                   <div className="space-y-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
                     <p className="text-sm font-medium">Visibilidad de bloques</p>
+                    <div className="max-w-xs">
+                      <p className="text-xs text-muted-foreground mb-1">Estilo visual de tarjeta</p>
+                      <Select
+                        value={selectedTemplateDisplayOptions.card_style}
+                        onValueChange={(value) => updateSelectedTemplateDisplayOptions({ card_style: value })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="elegant">Elegante</SelectItem>
+                          <SelectItem value="bold">Atrevido</SelectItem>
+                          <SelectItem value="glass">Glass</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                     <div className="grid gap-3 md:grid-cols-2">
                       <div className="flex items-center justify-between rounded-md border border-border/60 bg-background px-3 py-2">
                         <span className="text-xs">Mostrar tipo de perfil</span>
@@ -758,6 +786,22 @@ export const AdminProfileEditorPage = () => {
                         <Switch
                           checked={selectedTemplateDisplayOptions.show_floating_actions}
                           onCheckedChange={(checked) => updateSelectedTemplateDisplayOptions({ show_floating_actions: checked })}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-md border border-border/60 bg-background px-3 py-2">
+                        <span className="text-xs">Bloque de mapa</span>
+                        <Switch
+                          checked={selectedTemplateDisplayOptions.show_map_section}
+                          onCheckedChange={(checked) => updateSelectedTemplateDisplayOptions({ show_map_section: checked })}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between rounded-md border border-border/60 bg-background px-3 py-2">
+                        <span className="text-xs">Highlights en cabecera</span>
+                        <Switch
+                          checked={selectedTemplateDisplayOptions.show_highlights}
+                          onCheckedChange={(checked) => updateSelectedTemplateDisplayOptions({ show_highlights: checked })}
                         />
                       </div>
 

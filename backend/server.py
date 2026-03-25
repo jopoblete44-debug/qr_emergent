@@ -16,6 +16,7 @@ import unicodedata
 import bcrypt
 import jwt
 import qrcode
+import qrcode.image.svg as qrcode_svg
 import io
 import hashlib
 import requests
@@ -29,7 +30,9 @@ from urllib.parse import quote, urlparse
 import csv
 import smtplib
 import copy
+import html
 from email.message import EmailMessage
+from qrcode.constants import ERROR_CORRECT_L, ERROR_CORRECT_M, ERROR_CORRECT_Q, ERROR_CORRECT_H
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -109,6 +112,36 @@ PROFILE_FLOATING_BUTTON_DEFINITIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         'call_business': {'label': 'Llamar negocio'},
         'website': {'label': 'Sitio web'},
     },
+}
+QR_ERROR_CORRECTION_MAP = {
+    'L': ERROR_CORRECT_L,
+    'M': ERROR_CORRECT_M,
+    'Q': ERROR_CORRECT_Q,
+    'H': ERROR_CORRECT_H,
+}
+QR_COMPLEXITY_TO_ERROR_CORRECTION = {
+    'compact': 'L',
+    'balanced': 'M',
+    'redundant': 'Q',
+    'maximum': 'H',
+}
+QR_OUTPUT_FORMATS = {'png', 'svg'}
+QR_HASH_POSITIONS = {'top', 'bottom'}
+QR_SVG_FACTORIES = {'path', 'rect'}
+DEFAULT_QR_GENERATION_SETTINGS: Dict[str, Any] = {
+    'output_format': 'svg',
+    'complexity_mode': 'balanced',
+    'error_correction': 'M',
+    'force_version': 0,
+    'module_size': 10,
+    'quiet_zone_modules': 4,
+    'data_optimization': 20,
+    'hash_visible': True,
+    'hash_position': 'bottom',
+    'hash_prefix': 'ID:',
+    'hash_font_size': 16,
+    'hash_padding': 12,
+    'svg_factory': 'path',
 }
 SETTINGS_IMAGE_ALLOWED_SCOPES: Dict[str, Set[str]] = {
     'brand_logo_url': {'brand', 'general'},
@@ -1642,6 +1675,9 @@ def build_generic_profile_template_patch(
             {'id': 'phone', 'name': 'phone', 'label': 'Teléfono', 'type': 'tel', 'required': False, 'visible': True, 'icon': 'phone', 'placeholder': '+56...'},
             {'id': 'email', 'name': 'email', 'label': 'Email', 'type': 'email', 'required': False, 'visible': True, 'icon': 'mail', 'placeholder': ''},
             {'id': 'address', 'name': 'address', 'label': 'Dirección', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': ''},
+            {'id': 'map_address', 'name': 'map_address', 'label': 'Dirección para Mapa', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': 'Calle, comuna, ciudad'},
+            {'id': 'latitude', 'name': 'latitude', 'label': 'Latitud', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': '-33.4489'},
+            {'id': 'longitude', 'name': 'longitude', 'label': 'Longitud', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': '-70.6693'},
             {'id': 'website', 'name': 'website', 'label': 'Sitio web', 'type': 'url', 'required': False, 'visible': True, 'icon': 'globe', 'placeholder': 'https://'},
             {'id': 'whatsapp', 'name': 'whatsapp', 'label': 'WhatsApp', 'type': 'tel', 'required': False, 'visible': True, 'icon': 'phone', 'placeholder': '569...'},
             {'id': 'schedule', 'name': 'schedule', 'label': 'Horario', 'type': 'text', 'required': False, 'visible': True, 'icon': 'clock', 'placeholder': 'Lun-Vie 09:00-18:00'},
@@ -1654,6 +1690,7 @@ def build_generic_profile_template_patch(
             {'id': 'phone', 'name': 'phone', 'label': 'Teléfono', 'type': 'tel', 'required': False, 'visible': True, 'icon': 'phone', 'placeholder': '+56...'},
             {'id': 'email', 'name': 'email', 'label': 'Email', 'type': 'email', 'required': False, 'visible': True, 'icon': 'mail', 'placeholder': ''},
             {'id': 'address', 'name': 'address', 'label': 'Dirección', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': ''},
+            {'id': 'city', 'name': 'city', 'label': 'Ciudad', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': ''},
             {'id': 'emergency_contact', 'name': 'emergency_contact', 'label': 'Contacto de emergencia', 'type': 'text', 'required': False, 'visible': True, 'icon': 'phone', 'placeholder': ''},
             {'id': 'notes', 'name': 'notes', 'label': 'Notas', 'type': 'textarea', 'required': False, 'visible': True, 'icon': 'file-text', 'placeholder': ''},
         ]
@@ -1677,6 +1714,9 @@ def build_generic_profile_template_patch(
             'show_floating_actions': True,
             'show_lead_form': category == 'business',
             'show_manual_location_button': category == 'personal',
+            'show_map_section': category == 'business',
+            'show_highlights': True,
+            'card_style': 'elegant',
         },
         'sections': [
             {
@@ -1766,6 +1806,68 @@ def append_fields_to_template_patch(
             continue
         existing_fields.append(copy.deepcopy(field_patch))
         existing_keys.add(key)
+
+def append_fields_to_all_templates(
+    *,
+    category: Literal['personal', 'business'],
+    fields: List[Dict[str, Any]],
+    preferred_section_ids: Optional[List[str]] = None,
+) -> None:
+    category_templates = PROFILE_TEMPLATE_MIGRATION_PATCHES.get(category)
+    if not isinstance(category_templates, dict):
+        return
+    preferred_ids = [item for item in (preferred_section_ids or []) if isinstance(item, str) and item.strip()]
+
+    for template_key, template in category_templates.items():
+        if not isinstance(template, dict):
+            continue
+        sections = template.get('sections')
+        if not isinstance(sections, list) or not sections:
+            continue
+
+        section_id = None
+        for preferred_id in preferred_ids:
+            if any(isinstance(section, dict) and section.get('id') == preferred_id for section in sections):
+                section_id = preferred_id
+                break
+        if not section_id:
+            for candidate in sections:
+                if isinstance(candidate, dict) and candidate.get('id'):
+                    section_id = str(candidate['id'])
+                    break
+        if not section_id:
+            section_id = 's_main'
+
+        append_fields_to_template_patch(
+            category=category,
+            template_key=template_key,
+            section_id=section_id,
+            fields=fields,
+            fallback_section_title='Información de contacto',
+            fallback_section_description='Canales y ubicación del perfil',
+            fallback_section_icon='map-pin',
+        )
+
+append_fields_to_all_templates(
+    category='business',
+    preferred_section_ids=['s_contact', 's_info', 's_main', 's_event', 's_tourism', 's_catalog'],
+    fields=[
+        {'id': 'map_address', 'name': 'map_address', 'label': 'Dirección para mapa', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': 'Dirección completa'},
+        {'id': 'latitude', 'name': 'latitude', 'label': 'Latitud', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': '-33.4489'},
+        {'id': 'longitude', 'name': 'longitude', 'label': 'Longitud', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': '-70.6693'},
+        {'id': 'google_maps_url', 'name': 'google_maps_url', 'label': 'Link Google Maps', 'type': 'url', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': 'https://maps.google.com/...'},
+        {'id': 'service_area', 'name': 'service_area', 'label': 'Área de cobertura', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': 'Región Metropolitana, Valparaíso...'},
+    ],
+)
+
+append_fields_to_all_templates(
+    category='personal',
+    preferred_section_ids=['s_person', 's_main', 's_contact', 's_owner', 's_emergency'],
+    fields=[
+        {'id': 'city', 'name': 'city', 'label': 'Ciudad', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': ''},
+        {'id': 'secondary_phone', 'name': 'secondary_phone', 'label': 'Teléfono alternativo', 'type': 'tel', 'required': False, 'visible': True, 'icon': 'phone', 'placeholder': '+56...'},
+    ],
+)
 
 append_fields_to_template_patch(
     category='business',
@@ -2162,37 +2264,213 @@ def generate_qr_hash(user_id: str, profile_name: str) -> str:
     unique_string = f"{user_id}-{profile_name}-{datetime.now(timezone.utc).isoformat()}"
     return hashlib.sha256(unique_string.encode()).hexdigest()[:16]
 
-def generate_qr_image(qr_hash: str, fg_color: str = "black", bg_color: str = "white", box_size: int = 10, border: int = 4) -> bytes:
-    """Genera imagen QR con el hash visible debajo"""
+def _clamp_int(value: Any, minimum: int, maximum: int, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+def _extract_svg_dimensions(svg_markup: str) -> Tuple[float, float]:
+    view_box_match = re.search(r'viewBox="([^"]+)"', svg_markup)
+    if view_box_match:
+        parts = [part for part in view_box_match.group(1).strip().split(' ') if part]
+        if len(parts) == 4:
+            try:
+                return float(parts[2]), float(parts[3])
+            except ValueError:
+                pass
+
+    width_match = re.search(r'width="([0-9]+(?:\.[0-9]+)?)', svg_markup)
+    height_match = re.search(r'height="([0-9]+(?:\.[0-9]+)?)', svg_markup)
+    if width_match and height_match:
+        try:
+            return float(width_match.group(1)), float(height_match.group(1))
+        except ValueError:
+            pass
+    return 100.0, 100.0
+
+def normalize_qr_generation_settings(raw_settings: Any) -> Dict[str, Any]:
+    source = raw_settings if isinstance(raw_settings, dict) else {}
+
+    output_format = str(source.get('output_format') or source.get('format') or DEFAULT_QR_GENERATION_SETTINGS['output_format']).strip().lower()
+    if output_format not in QR_OUTPUT_FORMATS:
+        output_format = DEFAULT_QR_GENERATION_SETTINGS['output_format']
+
+    complexity_mode = str(source.get('complexity_mode') or source.get('complexity') or DEFAULT_QR_GENERATION_SETTINGS['complexity_mode']).strip().lower()
+    if complexity_mode not in QR_COMPLEXITY_TO_ERROR_CORRECTION:
+        complexity_mode = DEFAULT_QR_GENERATION_SETTINGS['complexity_mode']
+
+    requested_error_correction = str(
+        source.get('error_correction')
+        or source.get('errorCorrection')
+        or QR_COMPLEXITY_TO_ERROR_CORRECTION.get(complexity_mode, DEFAULT_QR_GENERATION_SETTINGS['error_correction'])
+    ).strip().upper()
+    if requested_error_correction not in QR_ERROR_CORRECTION_MAP:
+        requested_error_correction = QR_COMPLEXITY_TO_ERROR_CORRECTION.get(complexity_mode, DEFAULT_QR_GENERATION_SETTINGS['error_correction'])
+
+    force_version = _clamp_int(
+        source.get('force_version', source.get('version', DEFAULT_QR_GENERATION_SETTINGS['force_version'])),
+        0,
+        40,
+        DEFAULT_QR_GENERATION_SETTINGS['force_version'],
+    )
+    module_size = _clamp_int(
+        source.get('module_size', source.get('box_size', DEFAULT_QR_GENERATION_SETTINGS['module_size'])),
+        4,
+        40,
+        DEFAULT_QR_GENERATION_SETTINGS['module_size'],
+    )
+    quiet_zone_modules = _clamp_int(
+        source.get('quiet_zone_modules', source.get('border', DEFAULT_QR_GENERATION_SETTINGS['quiet_zone_modules'])),
+        0,
+        20,
+        DEFAULT_QR_GENERATION_SETTINGS['quiet_zone_modules'],
+    )
+    data_optimization = _clamp_int(
+        source.get('data_optimization', source.get('optimize', DEFAULT_QR_GENERATION_SETTINGS['data_optimization'])),
+        0,
+        40,
+        DEFAULT_QR_GENERATION_SETTINGS['data_optimization'],
+    )
+
+    hash_position = str(source.get('hash_position') or DEFAULT_QR_GENERATION_SETTINGS['hash_position']).strip().lower()
+    if hash_position not in QR_HASH_POSITIONS:
+        hash_position = DEFAULT_QR_GENERATION_SETTINGS['hash_position']
+
+    hash_prefix = str(source.get('hash_prefix', DEFAULT_QR_GENERATION_SETTINGS['hash_prefix']) or '').strip()
+    if len(hash_prefix) > 32:
+        hash_prefix = hash_prefix[:32]
+
+    hash_font_size = _clamp_int(
+        source.get('hash_font_size', source.get('hashFontSize', DEFAULT_QR_GENERATION_SETTINGS['hash_font_size'])),
+        10,
+        40,
+        DEFAULT_QR_GENERATION_SETTINGS['hash_font_size'],
+    )
+    hash_padding = _clamp_int(
+        source.get('hash_padding', source.get('hashPadding', DEFAULT_QR_GENERATION_SETTINGS['hash_padding'])),
+        4,
+        48,
+        DEFAULT_QR_GENERATION_SETTINGS['hash_padding'],
+    )
+
+    svg_factory = str(source.get('svg_factory') or source.get('svgFactory') or DEFAULT_QR_GENERATION_SETTINGS['svg_factory']).strip().lower()
+    if svg_factory not in QR_SVG_FACTORIES:
+        svg_factory = DEFAULT_QR_GENERATION_SETTINGS['svg_factory']
+
+    return {
+        'output_format': output_format,
+        'complexity_mode': complexity_mode,
+        'error_correction': requested_error_correction,
+        'force_version': force_version,
+        'module_size': module_size,
+        'quiet_zone_modules': quiet_zone_modules,
+        'data_optimization': data_optimization,
+        'hash_visible': coerce_bool(source.get('hash_visible', source.get('show_hash', DEFAULT_QR_GENERATION_SETTINGS['hash_visible'])), default=True),
+        'hash_position': hash_position,
+        'hash_prefix': hash_prefix,
+        'hash_font_size': hash_font_size,
+        'hash_padding': hash_padding,
+        'svg_factory': svg_factory,
+    }
+
+def resolve_qr_generation_settings_from_platform(settings: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if isinstance(settings, dict):
+        return normalize_qr_generation_settings(settings.get('qr_generation'))
+    return normalize_qr_generation_settings(None)
+
+def generate_qr_image(
+    qr_hash: str,
+    fg_color: str = "black",
+    bg_color: str = "white",
+    box_size: Optional[int] = None,
+    border: Optional[int] = None,
+    generation_settings: Optional[Dict[str, Any]] = None,
+) -> Tuple[bytes, str, str]:
+    """Genera imagen QR y retorna bytes, media_type y extensión."""
     from PIL import Image, ImageDraw, ImageFont
-    
+
+    qr_generation = normalize_qr_generation_settings(generation_settings)
+    if box_size is not None:
+        qr_generation['module_size'] = _clamp_int(box_size, 4, 40, qr_generation['module_size'])
+    if border is not None:
+        qr_generation['quiet_zone_modules'] = _clamp_int(border, 0, 20, qr_generation['quiet_zone_modules'])
+
     qr_url = f"{FRONTEND_URL}/profile/{qr_hash}"
-    qr = qrcode.QRCode(version=1, box_size=box_size, border=border)
-    qr.add_data(qr_url)
-    qr.make(fit=True)
+    qr_version = qr_generation['force_version'] if qr_generation['force_version'] > 0 else None
+    qr = qrcode.QRCode(
+        version=qr_version,
+        box_size=qr_generation['module_size'],
+        border=qr_generation['quiet_zone_modules'],
+        error_correction=QR_ERROR_CORRECTION_MAP[qr_generation['error_correction']],
+    )
+    qr.add_data(qr_url, optimize=qr_generation['data_optimization'])
+    qr.make(fit=(qr_version is None))
+
+    include_hash = qr_generation['hash_visible']
+    hash_label = f"{qr_generation['hash_prefix']} {qr_hash}".strip() if qr_generation['hash_prefix'] else qr_hash
+    hash_position = qr_generation['hash_position']
+
+    if qr_generation['output_format'] == 'svg':
+        image_factory = qrcode_svg.SvgPathImage if qr_generation['svg_factory'] == 'path' else qrcode_svg.SvgImage
+        svg_image = qr.make_image(image_factory=image_factory, fill_color=fg_color, back_color=bg_color)
+        svg_markup = svg_image.to_string(encoding='unicode')
+        if include_hash:
+            svg_width, svg_height = _extract_svg_dimensions(svg_markup)
+            body = re.sub(r'^<svg[^>]*>', '', svg_markup, count=1).replace('</svg>', '')
+            text_space = max(6.0, min(20.0, (qr_generation['hash_font_size'] / 3.2) + (qr_generation['hash_padding'] / 3.0)))
+            total_height = svg_height + text_space
+            qr_y = text_space if hash_position == 'top' else 0.0
+            text_y = (text_space * 0.72) if hash_position == 'top' else (svg_height + (text_space * 0.72))
+            font_size = max(2.6, min(8.0, qr_generation['hash_font_size'] / 2.8))
+            escaped_hash = html.escape(hash_label)
+            svg_markup = (
+                f'<svg xmlns="http://www.w3.org/2000/svg" '
+                f'viewBox="0 0 {svg_width:.3f} {total_height:.3f}" '
+                f'width="{svg_width:.3f}mm" height="{total_height:.3f}mm">'
+                f'<rect x="0" y="0" width="{svg_width:.3f}" height="{total_height:.3f}" fill="{html.escape(bg_color)}" />'
+                f'<g transform="translate(0,{qr_y:.3f})" fill="{html.escape(fg_color)}" stroke="{html.escape(fg_color)}">{body}</g>'
+                f'<text x="{(svg_width / 2):.3f}" y="{text_y:.3f}" '
+                f'text-anchor="middle" font-family="Arial, sans-serif" '
+                f'font-size="{font_size:.3f}" fill="{html.escape(fg_color)}">{escaped_hash}</text>'
+                f'</svg>'
+            )
+        return svg_markup.encode('utf-8'), "image/svg+xml", "svg"
+
     qr_img = qr.make_image(fill_color=fg_color, back_color=bg_color).convert('RGB')
-    
+    if not include_hash:
+        img_byte_arr = io.BytesIO()
+        qr_img.save(img_byte_arr, format='PNG')
+        img_byte_arr.seek(0)
+        return img_byte_arr.getvalue(), "image/png", "png"
+
     qr_width, qr_height = qr_img.size
-    text_height = 40
+    text_height = max(30, qr_generation['hash_font_size'] + qr_generation['hash_padding'] + 8)
     final_img = Image.new('RGB', (qr_width, qr_height + text_height), bg_color)
-    final_img.paste(qr_img, (0, 0))
-    
+
+    if hash_position == 'top':
+        final_img.paste(qr_img, (0, text_height))
+        text_y = max(4, qr_generation['hash_padding'] // 2)
+    else:
+        final_img.paste(qr_img, (0, 0))
+        text_y = qr_height + max(4, qr_generation['hash_padding'] // 2)
+
     draw = ImageDraw.Draw(final_img)
     try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
-    except:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", qr_generation['hash_font_size'])
+    except Exception:
         font = ImageFont.load_default()
-    
-    text = f"ID: {qr_hash}"
-    bbox = draw.textbbox((0, 0), text, font=font)
+
+    bbox = draw.textbbox((0, 0), hash_label, font=font)
     text_width = bbox[2] - bbox[0]
-    text_position = ((qr_width - text_width) // 2, qr_height + 10)
-    draw.text(text_position, text, fill=fg_color, font=font)
-    
+    text_position = ((qr_width - text_width) // 2, text_y)
+    draw.text(text_position, hash_label, fill=fg_color, font=font)
+
     img_byte_arr = io.BytesIO()
     final_img.save(img_byte_arr, format='PNG')
     img_byte_arr.seek(0)
-    return img_byte_arr.getvalue()
+    return img_byte_arr.getvalue(), "image/png", "png"
 
 async def get_platform_settings(request: Optional[Request] = None) -> Dict[str, Any]:
     settings_doc = await db.admin_configs.find_one({'config_type': 'platform_settings'}, {'_id': 0, 'data': 1})
@@ -2214,6 +2492,9 @@ async def get_platform_settings(request: Optional[Request] = None) -> Dict[str, 
         'max_qr_per_business': 50,
         'allow_person_create_qr': False,
         'allow_business_create_qr': True,
+        'qr_generation': copy.deepcopy(DEFAULT_QR_GENERATION_SETTINGS),
+        'enable_notifications_email': False,
+        'notification_email_sender': '',
         'enable_store': True,
         'enable_coupons': True,
         'default_shipping_cost': default_shipping_cost,
@@ -2263,9 +2544,11 @@ async def get_platform_settings(request: Optional[Request] = None) -> Dict[str, 
             merged.get('shipping_regions'),
             merged['default_shipping_cost']
         )
+        merged['qr_generation'] = normalize_qr_generation_settings(merged.get('qr_generation'))
         return sanitize_settings_image_fields(merged, request=request, strict=False)
     defaults['default_shipping_cost'] = parse_non_negative_float(defaults.get('default_shipping_cost', default_shipping_cost), default_shipping_cost)
     defaults['shipping_regions'] = normalize_shipping_regions_config(defaults.get('shipping_regions'), defaults['default_shipping_cost'])
+    defaults['qr_generation'] = normalize_qr_generation_settings(defaults.get('qr_generation'))
     return sanitize_settings_image_fields(defaults, request=request, strict=False)
 
 def sanitize_campaign_value(value: Optional[str], max_len: int = 120) -> Optional[str]:
@@ -2432,9 +2715,12 @@ def normalize_profile_public_settings(
         base_settings.pop(legacy_key, None)
     return base_settings
 
-def normalize_template_display_options(raw_options: Any, category: Any) -> Dict[str, bool]:
+def normalize_template_display_options(raw_options: Any, category: Any) -> Dict[str, Any]:
     normalized_category = 'business' if str(category or '').strip().lower() == 'business' else 'personal'
     source = raw_options if isinstance(raw_options, dict) else {}
+    card_style = str(source.get('card_style', source.get('cardStyle', 'elegant')) or 'elegant').strip().lower()
+    if card_style not in {'elegant', 'bold', 'glass'}:
+        card_style = 'elegant'
 
     return {
         'show_profile_type_badge': coerce_bool(
@@ -2457,6 +2743,15 @@ def normalize_template_display_options(raw_options: Any, category: Any) -> Dict[
             source.get('show_manual_location_button', source.get('showManualLocationButton')),
             default=True,
         ) if normalized_category == 'personal' else False,
+        'show_map_section': coerce_bool(
+            source.get('show_map_section', source.get('showMapSection')),
+            default=(normalized_category == 'business'),
+        ),
+        'show_highlights': coerce_bool(
+            source.get('show_highlights', source.get('showHighlights')),
+            default=True,
+        ),
+        'card_style': card_style,
     }
 
 def normalize_profile_types_config_data(raw_config: Any) -> Tuple[Dict[str, Any], bool]:
@@ -2674,8 +2969,12 @@ def build_public_profile_url(profile: Dict[str, Any]) -> Optional[str]:
     return f"{FRONTEND_URL.rstrip('/')}/profile/{quote(profile_hash)}"
 
 def build_profile_location_link(profile_data: Dict[str, Any]) -> Optional[str]:
-    lat = parse_optional_float(get_first_present_value(profile_data, ['lat', 'latitude']))
-    lng = parse_optional_float(get_first_present_value(profile_data, ['lng', 'longitude', 'lon']))
+    direct_map_link = normalize_public_link_url(get_first_present_value(profile_data, ['google_maps_url', 'maps_url', 'map_url']))
+    if direct_map_link:
+        return direct_map_link
+
+    lat = parse_optional_float(get_first_present_value(profile_data, ['lat', 'latitude', 'map_latitude']))
+    lng = parse_optional_float(get_first_present_value(profile_data, ['lng', 'longitude', 'lon', 'map_longitude']))
     if lat is not None and lng is not None:
         return f"https://www.google.com/maps/search/?api=1&query={lat},{lng}"
 
@@ -4926,10 +5225,14 @@ async def generate_qr(profile_id: str, request: Request):
     profile = await db.qr_profiles.find_one(query, {'_id': 0})
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    
-    qr_image_bytes = generate_qr_image(profile['hash'])
-    
-    return StreamingResponse(io.BytesIO(qr_image_bytes), media_type="image/png")
+
+    settings = await get_platform_settings(request=request)
+    qr_image_bytes, media_type, _ = generate_qr_image(
+        profile['hash'],
+        generation_settings=settings.get('qr_generation'),
+    )
+
+    return StreamingResponse(io.BytesIO(qr_image_bytes), media_type=media_type)
 
 @api_router.get("/qr-profiles/{profile_id}/generate-qr-custom")
 async def generate_qr_custom(
@@ -4948,13 +5251,21 @@ async def generate_qr_custom(
     profile = await db.qr_profiles.find_one(query, {'_id': 0})
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    
+
     # Validate params
-    box_size = max(5, min(20, box_size))
-    border = max(1, min(10, border))
-    
-    qr_image_bytes = generate_qr_image(profile['hash'], fg_color=fg_color, bg_color=bg_color, box_size=box_size, border=border)
-    return StreamingResponse(io.BytesIO(qr_image_bytes), media_type="image/png")
+    box_size = max(4, min(40, box_size))
+    border = max(0, min(20, border))
+
+    settings = await get_platform_settings(request=request)
+    qr_image_bytes, media_type, _ = generate_qr_image(
+        profile['hash'],
+        fg_color=fg_color,
+        bg_color=bg_color,
+        box_size=box_size,
+        border=border,
+        generation_settings=settings.get('qr_generation'),
+    )
+    return StreamingResponse(io.BytesIO(qr_image_bytes), media_type=media_type)
 
 @api_router.get("/qr-profiles/{profile_id}/details")
 async def get_qr_profile_details(profile_id: str, request: Request):
@@ -6645,9 +6956,13 @@ async def admin_download_qr(profile_id: str, request: Request):
     profile = await db.qr_profiles.find_one({'id': profile_id}, {'_id': 0})
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
-    
-    qr_image_bytes = generate_qr_image(profile['hash'])
-    return StreamingResponse(io.BytesIO(qr_image_bytes), media_type="image/png")
+
+    settings = await get_platform_settings(request=request)
+    qr_image_bytes, media_type, _ = generate_qr_image(
+        profile['hash'],
+        generation_settings=settings.get('qr_generation'),
+    )
+    return StreamingResponse(io.BytesIO(qr_image_bytes), media_type=media_type)
 
 @api_router.get("/admin/profile-types-config")
 async def get_profile_types_config(request: Request):
@@ -6702,6 +7017,9 @@ async def update_admin_settings(settings_data: Dict[str, Any], request: Request)
     settings_data.setdefault('max_qr_per_business', 50)
     settings_data.setdefault('allow_person_create_qr', False)
     settings_data.setdefault('allow_business_create_qr', True)
+    settings_data.setdefault('qr_generation', copy.deepcopy(DEFAULT_QR_GENERATION_SETTINGS))
+    settings_data.setdefault('enable_notifications_email', False)
+    settings_data.setdefault('notification_email_sender', '')
     settings_data.setdefault('enable_store', True)
     settings_data.setdefault('enable_coupons', True)
     settings_data.setdefault('default_shipping_cost', 2990)
@@ -6747,6 +7065,7 @@ async def update_admin_settings(settings_data: Dict[str, Any], request: Request)
         settings_data.get('shipping_regions'),
         settings_data['default_shipping_cost']
     )
+    settings_data['qr_generation'] = normalize_qr_generation_settings(settings_data.get('qr_generation'))
 
     await db.admin_configs.update_one(
         {'config_type': 'platform_settings'},
@@ -6984,6 +7303,9 @@ async def startup_db():
         'max_qr_per_business': 50,
         'allow_person_create_qr': False,
         'allow_business_create_qr': True,
+        'qr_generation': copy.deepcopy(DEFAULT_QR_GENERATION_SETTINGS),
+        'enable_notifications_email': False,
+        'notification_email_sender': '',
         'enable_store': True,
         'enable_coupons': True,
         'default_shipping_cost': 2990,
@@ -7053,6 +7375,10 @@ async def startup_db():
         )
         if current_data.get('shipping_regions') != normalized_regions:
             current_data['shipping_regions'] = normalized_regions
+            needs_update = True
+        normalized_qr_generation = normalize_qr_generation_settings(current_data.get('qr_generation'))
+        if current_data.get('qr_generation') != normalized_qr_generation:
+            current_data['qr_generation'] = normalized_qr_generation
             needs_update = True
         if needs_update:
             await db.admin_configs.update_one(

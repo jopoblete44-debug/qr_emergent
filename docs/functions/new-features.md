@@ -253,3 +253,27 @@ Fuentes de inspiracion (web):
   - https://www.pethub.com/articles/4070545/qr-pet-id-tags-privacy-what-you-need-to-know
 - OWASP (buenas practicas de flujo forgot-password):
   - https://cheatsheetseries.owasp.org/cheatsheets/Forgot_Password_Cheat_Sheet.html
+
+## 16) Configuracion Admin depurada + Motor QR Global + Tarjetas renovadas
+
+- `Admin > Configuracion` se depuro para dejar solo ajustes implementados:
+  - se removieron opciones no conectadas (WhatsApp/Telegram como canal nativo, mantenimiento e idioma avanzado en ese panel).
+  - pagos mantiene toggle/moneda y aclara que credenciales sensibles van por variables de entorno.
+- Nueva configuracion global del generador QR (`qr_generation`) en `Admin > Configuracion > Codigos QR`:
+  - formato de salida (`svg`/`png`)
+  - complejidad (`compact|balanced|redundant|maximum`)
+  - nivel de correccion (`L|M|Q|H`)
+  - version fija (o auto), tamaño de modulo, quiet zone, optimizacion
+  - hash visible/opcional, prefijo, tamaño, padding, posicion (arriba/abajo)
+  - modo SVG (`path`/`rect`)
+- Impacto global:
+  - aplica a `GET /api/qr-profiles/{id}/generate-qr`
+  - aplica a `GET /api/qr-profiles/{id}/generate-qr-custom`
+  - aplica a `GET /api/admin/qr-profiles/{id}/download-qr`
+- Descarga QR en frontend actualizada para respetar extension real segun `Content-Type` (`.svg` o `.png`).
+- Render publico renovado:
+  - nuevos estilos de tarjeta por plantilla (`elegant`, `bold`, `glass`)
+  - bloque de mapa opcional por plantilla (embed + boton abrir en Google Maps)
+  - control de highlights en cabecera por plantilla
+  - campos comunes nuevos para empresas y perfiles extendidos:
+    - `map_address`, `latitude`, `longitude`, `google_maps_url`, `service_area`.

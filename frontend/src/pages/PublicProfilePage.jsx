@@ -184,6 +184,41 @@ const buildGoogleReviewUrl = (data) => {
   const placeId = String(data.google_review_place_id || '').trim();
   return placeId ? `https://search.google.com/local/writereview?placeid=${encodeURIComponent(placeId)}` : null;
 };
+const buildMapEmbedUrl = (data) => {
+  if (!data || typeof data !== 'object') return null;
+  const directMapLink = normalizePublicActionUrl(data.google_maps_url || data.maps_url || data.map_url);
+  if (directMapLink && /^https?:\/\//i.test(directMapLink)) {
+    if (/output=embed/i.test(directMapLink)) return directMapLink;
+    return `${directMapLink}${directMapLink.includes('?') ? '&' : '?'}output=embed`;
+  }
+
+  const lat = Number.parseFloat(data.latitude ?? data.lat ?? data.map_latitude);
+  const lng = Number.parseFloat(data.longitude ?? data.lng ?? data.lon ?? data.map_longitude);
+  if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
+    return `https://maps.google.com/maps?q=${lat},${lng}&z=15&output=embed`;
+  }
+
+  const address = String(data.map_address || data.address || data.location || '').trim();
+  if (address) {
+    return `https://maps.google.com/maps?q=${encodeURIComponent(address)}&z=15&output=embed`;
+  }
+  return null;
+};
+const buildMapOpenUrl = (data) => {
+  if (!data || typeof data !== 'object') return null;
+  const directMapLink = normalizePublicActionUrl(data.google_maps_url || data.maps_url || data.map_url);
+  if (directMapLink) return directMapLink;
+  const lat = Number.parseFloat(data.latitude ?? data.lat ?? data.map_latitude);
+  const lng = Number.parseFloat(data.longitude ?? data.lng ?? data.lon ?? data.map_longitude);
+  if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
+    return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+  }
+  const address = String(data.map_address || data.address || data.location || '').trim();
+  if (address) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+  }
+  return null;
+};
 const resolveProfileImageUrl = (value, { trustExplicitImageField = false } = {}) => {
   if (!value || typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -666,6 +701,20 @@ export const PublicProfilePage = () => {
   const showManualLocationButtonByTemplate = profile.profile_type === 'personal'
     ? Boolean(templateDisplayOptions.show_manual_location_button ?? templateDisplayOptions.showManualLocationButton ?? true)
     : false;
+  const showMapSectionByTemplate = Boolean(
+    templateDisplayOptions.show_map_section
+    ?? templateDisplayOptions.showMapSection
+    ?? (profile.profile_type === 'business')
+  );
+  const showHighlightsByTemplate = Boolean(
+    templateDisplayOptions.show_highlights
+    ?? templateDisplayOptions.showHighlights
+    ?? true
+  );
+  const templateCardStyle = (() => {
+    const raw = String(templateDisplayOptions.card_style ?? templateDisplayOptions.cardStyle ?? 'elegant').trim().toLowerCase();
+    return ['elegant', 'bold', 'glass'].includes(raw) ? raw : 'elegant';
+  })();
 
   const renderMedical = () => {
     const photoSrc = getPersonalPhoto('medico', d);
@@ -1665,6 +1714,14 @@ export const PublicProfilePage = () => {
   const pageBgClass = profile.profile_type === 'business'
     ? `bg-gradient-to-b from-background via-background to-muted/30 ${theme.bg}`
     : theme.bg;
+  const mapEmbedUrl = showMapSectionByTemplate ? buildMapEmbedUrl(d) : null;
+  const mapOpenUrl = showMapSectionByTemplate ? buildMapOpenUrl(d) : null;
+  const mapAddressLabel = d.map_address || d.address || d.location || '';
+  const visualCardClassName = templateCardStyle === 'glass'
+    ? 'border-white/50 bg-white/80 backdrop-blur-md shadow-2xl'
+    : templateCardStyle === 'bold'
+      ? 'border-2 shadow-[0_26px_70px_-40px_rgba(15,23,42,0.7)]'
+      : 'border border-border/70 shadow-sm';
   const hasFloatingActions = showFloatingActionsByTemplate && floatingActionButtons.length > 0;
   const showTopProfilePhoto = topProfilePhotoEnabled && Boolean(topProfilePhotoUrl);
   const showLegacyHeaderAvatar = !showTopProfilePhoto;
@@ -1676,7 +1733,7 @@ export const PublicProfilePage = () => {
       data-testid="public-profile-page"
     >
       <div className="mx-auto w-full max-w-[560px]">
-        <Card className="mb-4 overflow-hidden border border-border/70" style={publicCardStyle}>
+        <Card className={`mb-4 overflow-hidden ${visualCardClassName}`} style={publicCardStyle}>
           {profile.profile_type === 'business' && showBusinessBanner && businessBannerUrl && (
             <div className="relative h-36 w-full border-b border-border/60">
               <img
@@ -1731,7 +1788,7 @@ export const PublicProfilePage = () => {
             {profile.profile_type === 'business' && businessSubtitle && (
               <p className="text-sm text-muted-foreground mt-2">{businessSubtitle}</p>
             )}
-            {headerHighlights.length > 0 && (
+            {showHighlightsByTemplate && headerHighlights.length > 0 && (
               <div className="mt-3 flex flex-wrap justify-center gap-1.5">
                 {headerHighlights.map((item, index) => (
                   <Badge key={`${item}-${index}`} variant="outline" className="max-w-full text-[11px] font-normal">
@@ -1745,6 +1802,42 @@ export const PublicProfilePage = () => {
             {renderer()}
           </CardContent>
         </Card>
+
+        {mapEmbedUrl && (
+          <Card className={`mb-4 overflow-hidden ${visualCardClassName}`} style={publicCardStyle}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <MapPin className="h-4 w-4" />
+                Ubicación
+              </CardTitle>
+              {mapAddressLabel && (
+                <p className="text-xs text-muted-foreground">{mapAddressLabel}</p>
+              )}
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="overflow-hidden rounded-xl border border-border/70">
+                <iframe
+                  src={mapEmbedUrl}
+                  title="Mapa del perfil"
+                  className="h-52 w-full border-0"
+                  loading="lazy"
+                  referrerPolicy="no-referrer-when-downgrade"
+                />
+              </div>
+              {mapOpenUrl && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => window.open(mapOpenUrl, '_blank', 'noopener,noreferrer')}
+                >
+                  <MapPin className="mr-2 h-4 w-4" />
+                  Abrir en Google Maps
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {profile.profile_type === 'personal' && showManualLocationButtonByTemplate && (
           <Button

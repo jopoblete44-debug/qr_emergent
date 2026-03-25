@@ -7,6 +7,11 @@ export const BACKEND_URL = typeof RAW_BACKEND_URL === 'string'
   ? RAW_BACKEND_URL.replace(/\/+$/, '')
   : '';
 export const API_BASE = BACKEND_URL ? `${BACKEND_URL}/api` : '/api';
+export const getQrDownloadExtension = (contentType) => {
+  const normalized = String(contentType || '').toLowerCase();
+  if (normalized.includes('image/svg')) return 'svg';
+  return 'png';
+};
 
 export const resolveMediaUrl = (value) => {
   if (!value || typeof value !== 'string') return null;

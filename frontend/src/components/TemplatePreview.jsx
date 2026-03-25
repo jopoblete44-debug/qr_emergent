@@ -29,10 +29,25 @@ export const TemplatePreview = ({ template, sampleData = {} }) => {
   const primaryColor = template.theme?.primary_color || '#dc2626';
   const bgColor = template.theme?.bg_color || '#fef2f2';
   const ProfileIcon = getIcon(template.icon) || Heart;
+  const displayOptions = template.display_options && typeof template.display_options === 'object'
+    ? template.display_options
+    : {};
+  const cardStyle = ['elegant', 'bold', 'glass'].includes(String(displayOptions.card_style || '').toLowerCase())
+    ? String(displayOptions.card_style).toLowerCase()
+    : 'elegant';
+  const cardClassName = cardStyle === 'glass'
+    ? 'shadow-xl border-white/40 bg-white/80 backdrop-blur'
+    : cardStyle === 'bold'
+      ? 'shadow-2xl border-2'
+      : 'shadow-sm';
+  const cardInlineStyle = cardStyle === 'bold'
+    ? { borderColor: `${primaryColor}4d` }
+    : undefined;
+  const showMapPreview = Boolean(displayOptions.show_map_section ?? (template.category === 'business'));
 
   return (
     <div style={{ backgroundColor: bgColor }} className="p-3 min-h-full" data-testid="template-preview">
-      <Card className="shadow-sm overflow-hidden">
+      <Card className={`overflow-hidden ${cardClassName}`} style={cardInlineStyle}>
         <CardHeader className="text-center pb-2 pt-4 px-4">
           <div
             className="mx-auto w-10 h-10 rounded-full flex items-center justify-center mb-1.5 border"
@@ -154,6 +169,18 @@ export const TemplatePreview = ({ template, sampleData = {} }) => {
               </div>
             );
           })}
+
+          {showMapPreview && (
+            <div className="rounded-lg border border-border/70 bg-background p-2.5">
+              <div className="flex items-center gap-1.5 mb-2">
+                <MapPin className="h-3.5 w-3.5" style={{ color: primaryColor }} />
+                <p className="text-xs font-semibold uppercase tracking-wide">Mapa</p>
+              </div>
+              <div className="h-20 rounded-md border border-dashed border-border/70 bg-muted/40 flex items-center justify-center">
+                <span className="text-[10px] text-muted-foreground">Vista de mapa en perfil público</span>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 

@@ -19,6 +19,7 @@ import {
   fetchAdminUsers,
   fetchProfileTypesConfig,
   API_BASE,
+  getQrDownloadExtension,
 } from '../utils/api';
 import { toast } from 'sonner';
 import {
@@ -417,10 +418,11 @@ export const AdminQRProfilesPage = () => {
       });
       if (!response.ok) throw new Error('Failed');
       const blob = await response.blob();
+      const extension = getQrDownloadExtension(response.headers.get('content-type'));
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `qr-${profile.hash}.png`;
+      a.download = `qr-${profile.hash}.${extension}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
