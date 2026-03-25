@@ -409,6 +409,21 @@ export const ProfileDataEditor = ({
       );
     }
 
+    if (type === 'map') {
+      return (
+        <div className="space-y-1.5">
+          <Input
+            {...baseProps}
+            type="text"
+            placeholder={placeholder || 'Dirección, coordenadas o URL de Google Maps'}
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Podés ingresar dirección, latitud/longitud o un enlace de Google Maps.
+          </p>
+        </div>
+      );
+    }
+
     if (type === 'select' && Array.isArray(field.options) && field.options.length > 0) {
       return (
         <Select value={normalizedValue ? String(normalizedValue) : undefined} onValueChange={(v) => handleDynamicFieldChange(field, v)}>

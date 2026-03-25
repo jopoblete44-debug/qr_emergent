@@ -277,3 +277,21 @@ Fuentes de inspiracion (web):
   - control de highlights en cabecera por plantilla
   - campos comunes nuevos para empresas y perfiles extendidos:
     - `map_address`, `latitude`, `longitude`, `google_maps_url`, `service_area`.
+
+## 17) Editor de perfiles: campo Mapa explicito + estilos visuales realmente diferenciados
+
+- En `Admin > Editor de Perfiles` ahora existe:
+  - tipo de campo `Mapa` en el selector de tipos
+  - boton rapido `Agregar Mapa` por seccion.
+- El campo `Mapa` permite capturar:
+  - direccion
+  - coordenadas (`lat,lng`)
+  - URL de Google Maps.
+- En perfil publico, los campos `type: map` ahora renderizan:
+  - preview embebido del mapa
+  - boton directo `Abrir mapa`.
+- Los 3 estilos visuales (`elegant`, `bold`, `glass`) se redisenaron para tener diferencias claras:
+  - `elegant`: limpio, claro y sobrio
+  - `bold`: oscuro, contraste alto y look mas agresivo
+  - `glass`: translúcido con blur y capas.
+- La vista previa móvil del editor replica estas diferencias para validar cambios antes de guardar.

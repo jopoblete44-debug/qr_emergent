@@ -175,6 +175,8 @@ React 19 + Vite (SPA) --> FastAPI (REST API) --> MongoDB
   - mostrar/ocultar bloque de mapa por plantilla
   - mostrar/ocultar highlights de cabecera
   - estilo visual de tarjeta por plantilla (elegante / atrevido / glass)
+  - tipo de campo `map` + acceso rapido `Agregar Mapa` en cada seccion
+  - render de `map` en perfil publico (embed + boton abrir mapa)
   - foto superior destacada opcional y forma configurable (circular/redondeada/cuadrada)
   - nuevos campos de ubicacion para negocios (direccion de mapa, latitud/longitud, link Google Maps, area de cobertura)
 
@@ -191,6 +193,7 @@ React 19 + Vite (SPA) --> FastAPI (REST API) --> MongoDB
 - Contrato `public_settings` por QR actualizado:
   - `request_location_automatically`
   - `floating_buttons` con maximo 3 acciones, limitadas por tipo.
+- Los estilos visuales `elegant`, `bold` y `glass` ahora tienen diferencias marcadas (fondo, contraste, sombras y jerarquia visual).
 - Dashboard de tipo `person` simplificado:
   - sin banner de creacion manual
   - con CTA directo para comprar productos cuando corresponde.

@@ -1852,7 +1852,7 @@ append_fields_to_all_templates(
     category='business',
     preferred_section_ids=['s_contact', 's_info', 's_main', 's_event', 's_tourism', 's_catalog'],
     fields=[
-        {'id': 'map_address', 'name': 'map_address', 'label': 'Dirección para mapa', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': 'Dirección completa'},
+        {'id': 'map_address', 'name': 'map_address', 'label': 'Dirección para mapa', 'type': 'map', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': 'Dirección completa'},
         {'id': 'latitude', 'name': 'latitude', 'label': 'Latitud', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': '-33.4489'},
         {'id': 'longitude', 'name': 'longitude', 'label': 'Longitud', 'type': 'text', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': '-70.6693'},
         {'id': 'google_maps_url', 'name': 'google_maps_url', 'label': 'Link Google Maps', 'type': 'url', 'required': False, 'visible': True, 'icon': 'map-pin', 'placeholder': 'https://maps.google.com/...'},

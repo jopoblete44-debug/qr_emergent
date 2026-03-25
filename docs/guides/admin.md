@@ -141,6 +141,7 @@ Ruta: `Admin > Editor de Perfiles`
 Capacidades clave:
 - editar secciones, campos, iconos, colores y descripciones.
 - usar tipo de campo `image` para fotos, logos, avatar y banners.
+- usar tipo de campo `map` (con boton rapido `Agregar Mapa` por seccion).
 - vista previa movil en tiempo real.
 - configurar `display_options` por plantilla:
   - estilo visual (`elegant`, `bold`, `glass`)
@@ -158,6 +159,10 @@ Plantillas destacadas:
 Sincronizacion:
 - al iniciar backend se aplica migracion de `profile_types` para completar campos nuevos faltantes en configuraciones antiguas.
 - se mantienen personalizaciones existentes y los campos quedan disponibles para edicion de clientes.
+
+Notas de uso de mapa:
+- El campo `map` acepta direccion, coordenadas `lat,lng` o URL de Google Maps.
+- En la tarjeta publica se renderiza embed + boton `Abrir mapa`.
 
 ## 11) Checklist de Produccion
 

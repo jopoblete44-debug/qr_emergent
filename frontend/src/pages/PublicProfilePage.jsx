@@ -219,6 +219,51 @@ const buildMapOpenUrl = (data) => {
   }
   return null;
 };
+const parseMapFieldSource = (value) => {
+  if (value === undefined || value === null) return null;
+  const raw = String(value).trim();
+  if (!raw) return null;
+
+  const asUrl = normalizePublicActionUrl(raw);
+  if (asUrl && /^https?:\/\//i.test(asUrl)) {
+    return { mode: 'url', value: asUrl };
+  }
+
+  const coordsMatch = raw.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+  if (coordsMatch) {
+    return {
+      mode: 'coords',
+      lat: Number.parseFloat(coordsMatch[1]),
+      lng: Number.parseFloat(coordsMatch[2]),
+      value: raw,
+    };
+  }
+
+  return { mode: 'address', value: raw };
+};
+const buildMapEmbedUrlFromFieldValue = (value) => {
+  const parsed = parseMapFieldSource(value);
+  if (!parsed) return null;
+  if (parsed.mode === 'url') {
+    const normalizedUrl = parsed.value;
+    return /output=embed/i.test(normalizedUrl)
+      ? normalizedUrl
+      : `${normalizedUrl}${normalizedUrl.includes('?') ? '&' : '?'}output=embed`;
+  }
+  if (parsed.mode === 'coords' && !Number.isNaN(parsed.lat) && !Number.isNaN(parsed.lng)) {
+    return `https://maps.google.com/maps?q=${parsed.lat},${parsed.lng}&z=15&output=embed`;
+  }
+  return `https://maps.google.com/maps?q=${encodeURIComponent(parsed.value)}&z=15&output=embed`;
+};
+const buildMapOpenUrlFromFieldValue = (value) => {
+  const parsed = parseMapFieldSource(value);
+  if (!parsed) return null;
+  if (parsed.mode === 'url') return parsed.value;
+  if (parsed.mode === 'coords' && !Number.isNaN(parsed.lat) && !Number.isNaN(parsed.lng)) {
+    return `https://www.google.com/maps/search/?api=1&query=${parsed.lat},${parsed.lng}`;
+  }
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(parsed.value)}`;
+};
 const resolveProfileImageUrl = (value, { trustExplicitImageField = false } = {}) => {
   if (!value || typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -638,12 +683,6 @@ export const PublicProfilePage = () => {
     ? templateTheme.bg_color.trim()
     : null;
   const theme = fallbackTheme;
-  const templateSectionStyle = templatePrimaryColor || templateBgColor
-    ? {
-      borderColor: templatePrimaryColor || undefined,
-      backgroundColor: templateBgColor || undefined,
-    }
-    : undefined;
   const templateIconWrapperStyle = templatePrimaryColor || templateBgColor
     ? {
       borderColor: templatePrimaryColor || undefined,
@@ -654,22 +693,7 @@ export const PublicProfilePage = () => {
   const pageThemeStyle = templateBgColor ? { backgroundColor: templateBgColor } : undefined;
   const cardPrimaryColor = templatePrimaryColor || undefined;
   const cardBorderSoft = templatePrimaryColor ? withAlpha(templatePrimaryColor, 0.35) : undefined;
-  const cardGlowSoft = templatePrimaryColor ? withAlpha(templatePrimaryColor, 0.16) : undefined;
-  const cardHeaderStyle = templatePrimaryColor
-    ? {
-      background: `linear-gradient(150deg, ${withAlpha(templatePrimaryColor, 0.2) || 'rgba(59,130,246,.15)'} 0%, rgba(255,255,255,0) 70%)`,
-    }
-    : undefined;
-  const publicCardStyle = cardBorderSoft || cardGlowSoft
-    ? {
-      borderColor: cardBorderSoft,
-      boxShadow: cardGlowSoft ? `0 18px 45px -28px ${cardGlowSoft}` : undefined,
-    }
-    : undefined;
-  const floatingPanelStyle = {
-    borderColor: cardBorderSoft || undefined,
-    boxShadow: cardGlowSoft ? `0 22px 38px -26px ${cardGlowSoft}` : undefined,
-  };
+  const cardGlowSoft = templatePrimaryColor ? withAlpha(templatePrimaryColor, 0.2) : undefined;
   const floatingPrimaryStyle = templatePrimaryColor
     ? {
       backgroundColor: templatePrimaryColor,
@@ -715,6 +739,78 @@ export const PublicProfilePage = () => {
     const raw = String(templateDisplayOptions.card_style ?? templateDisplayOptions.cardStyle ?? 'elegant').trim().toLowerCase();
     return ['elegant', 'bold', 'glass'].includes(raw) ? raw : 'elegant';
   })();
+  const isBoldTemplateCard = templateCardStyle === 'bold';
+  const isGlassTemplateCard = templateCardStyle === 'glass';
+  const pageOverlayStyle = isBoldTemplateCard
+    ? {
+      background: `radial-gradient(circle at top right, ${withAlpha(templatePrimaryColor || '#2563eb', 0.35) || 'rgba(37,99,235,.35)'} 0%, rgba(15,23,42,0) 60%)`,
+    }
+    : isGlassTemplateCard
+      ? {
+        background: `linear-gradient(145deg, ${withAlpha(templatePrimaryColor || '#2563eb', 0.2) || 'rgba(37,99,235,.2)'} 0%, rgba(255,255,255,0.32) 58%, rgba(255,255,255,0.56) 100%)`,
+      }
+      : {
+        background: `linear-gradient(180deg, ${withAlpha(templatePrimaryColor || '#2563eb', 0.1) || 'rgba(37,99,235,.1)'} 0%, rgba(255,255,255,0) 50%)`,
+      };
+  const cardHeaderStyle = isBoldTemplateCard
+    ? {
+      background: `linear-gradient(150deg, ${withAlpha(templatePrimaryColor || '#2563eb', 0.24) || 'rgba(37,99,235,.24)'} 0%, rgba(15,23,42,0.92) 78%)`,
+    }
+    : templatePrimaryColor
+      ? {
+        background: `linear-gradient(150deg, ${withAlpha(templatePrimaryColor, 0.2) || 'rgba(59,130,246,.15)'} 0%, rgba(255,255,255,0) 70%)`,
+      }
+      : undefined;
+  const visualCardClassName = isGlassTemplateCard
+    ? 'border border-white/50 bg-white/78 backdrop-blur-xl shadow-[0_26px_65px_-35px_rgba(15,23,42,0.6)]'
+    : isBoldTemplateCard
+      ? 'border-2 border-slate-900/15 bg-slate-950 text-slate-100 shadow-[0_30px_85px_-38px_rgba(2,6,23,0.95)]'
+      : 'border border-border/70 bg-white shadow-[0_16px_42px_-28px_rgba(15,23,42,0.38)]';
+  const publicCardStyle = isBoldTemplateCard
+    ? {
+      borderColor: withAlpha(templatePrimaryColor || '#2563eb', 0.45) || undefined,
+      background: `linear-gradient(165deg, ${withAlpha(templatePrimaryColor || '#2563eb', 0.2) || 'rgba(37,99,235,.2)'} 0%, rgba(2,6,23,0.96) 58%, rgba(2,6,23,1) 100%)`,
+      boxShadow: cardGlowSoft ? `0 26px 70px -35px ${cardGlowSoft}` : undefined,
+    }
+    : cardBorderSoft || cardGlowSoft
+      ? {
+        borderColor: cardBorderSoft,
+        boxShadow: cardGlowSoft ? `0 18px 45px -28px ${cardGlowSoft}` : undefined,
+      }
+      : undefined;
+  const floatingPanelStyle = isBoldTemplateCard
+    ? {
+      borderColor: withAlpha(templatePrimaryColor || '#2563eb', 0.42) || undefined,
+      background: `linear-gradient(145deg, ${withAlpha(templatePrimaryColor || '#2563eb', 0.2) || 'rgba(37,99,235,.2)'} 0%, rgba(2,6,23,0.92) 100%)`,
+      boxShadow: `0 26px 52px -28px ${withAlpha('#020617', 0.82) || 'rgba(2,6,23,.82)'}`,
+    }
+    : {
+      borderColor: cardBorderSoft || undefined,
+      boxShadow: cardGlowSoft ? `0 22px 38px -26px ${cardGlowSoft}` : undefined,
+    };
+  const templateSectionClassName = isGlassTemplateCard
+    ? 'space-y-3 rounded-xl border border-white/55 bg-white/72 p-4 backdrop-blur'
+    : isBoldTemplateCard
+      ? 'space-y-3 rounded-xl border p-4'
+      : `space-y-3 rounded-xl border ${theme.border} bg-background/80 p-4 shadow-sm`;
+  const templateSectionStyle = isBoldTemplateCard
+    ? {
+      borderColor: withAlpha(templatePrimaryColor || '#2563eb', 0.42) || undefined,
+      backgroundColor: withAlpha(templatePrimaryColor || '#2563eb', 0.12) || 'rgba(15,23,42,0.45)',
+    }
+    : templatePrimaryColor || templateBgColor
+      ? {
+        borderColor: templatePrimaryColor || undefined,
+        backgroundColor: templateBgColor || undefined,
+      }
+      : undefined;
+  const floatingOutlineButtonStyle = isBoldTemplateCard
+    ? {
+      borderColor: withAlpha(templatePrimaryColor || '#93c5fd', 0.65) || undefined,
+      color: '#ffffff',
+      backgroundColor: withAlpha(templatePrimaryColor || '#2563eb', 0.2) || undefined,
+    }
+    : floatingOutlineStyle;
 
   const renderMedical = () => {
     const photoSrc = getPersonalPhoto('medico', d);
@@ -845,6 +941,45 @@ export const PublicProfilePage = () => {
             );
           }
 
+          if (fieldType === 'map') {
+            const mapEmbedUrl = buildMapEmbedUrlFromFieldValue(stringValue);
+            const mapOpenUrl = buildMapOpenUrlFromFieldValue(stringValue);
+            return (
+              <div key={field.id || fieldKey} className="space-y-2 rounded-lg border border-border/70 bg-background/90 p-3">
+                <p className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
+                  {FieldIcon ? <FieldIcon className="h-3.5 w-3.5" /> : <MapPin className="h-3.5 w-3.5" />}
+                  {label}
+                </p>
+                <div className="overflow-hidden rounded-lg border border-border/70 bg-muted/20">
+                  {mapEmbedUrl ? (
+                    <iframe
+                      src={mapEmbedUrl}
+                      title={`${label}-map`}
+                      className="h-44 w-full border-0"
+                      loading="lazy"
+                      referrerPolicy="no-referrer-when-downgrade"
+                    />
+                  ) : (
+                    <div className="flex h-32 items-center justify-center text-xs text-muted-foreground px-3 text-center">
+                      Ingresa una dirección, coordenadas o URL de Google Maps.
+                    </div>
+                  )}
+                </div>
+                {mapOpenUrl && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => window.open(mapOpenUrl, '_blank', 'noopener,noreferrer')}
+                  >
+                    <MapPin className="mr-2 h-4 w-4" />
+                    Abrir mapa
+                  </Button>
+                )}
+              </div>
+            );
+          }
+
           if (fieldType === 'tel') {
             return (
               <a
@@ -928,7 +1063,7 @@ export const PublicProfilePage = () => {
             key={section.id || section.title}
             className={useCompactTemplateLayout
               ? 'space-y-3'
-              : `space-y-3 rounded-xl border ${theme.border} bg-background/80 p-4 shadow-sm`}
+              : templateSectionClassName}
             style={useCompactTemplateLayout ? undefined : templateSectionStyle}
           >
             {(section.title || section.description) && (
@@ -1714,25 +1849,26 @@ export const PublicProfilePage = () => {
   const pageBgClass = profile.profile_type === 'business'
     ? `bg-gradient-to-b from-background via-background to-muted/30 ${theme.bg}`
     : theme.bg;
-  const mapEmbedUrl = showMapSectionByTemplate ? buildMapEmbedUrl(d) : null;
-  const mapOpenUrl = showMapSectionByTemplate ? buildMapOpenUrl(d) : null;
+  const templateHasExplicitMapField = Boolean(
+    template?.sections?.some((section) => (
+      (section?.fields || []).some((field) => String(field?.type || '').trim().toLowerCase() === 'map' && field?.visible !== false)
+    ))
+  );
+  const mapEmbedUrl = showMapSectionByTemplate && !templateHasExplicitMapField ? buildMapEmbedUrl(d) : null;
+  const mapOpenUrl = showMapSectionByTemplate && !templateHasExplicitMapField ? buildMapOpenUrl(d) : null;
   const mapAddressLabel = d.map_address || d.address || d.location || '';
-  const visualCardClassName = templateCardStyle === 'glass'
-    ? 'border-white/50 bg-white/80 backdrop-blur-md shadow-2xl'
-    : templateCardStyle === 'bold'
-      ? 'border-2 shadow-[0_26px_70px_-40px_rgba(15,23,42,0.7)]'
-      : 'border border-border/70 shadow-sm';
   const hasFloatingActions = showFloatingActionsByTemplate && floatingActionButtons.length > 0;
   const showTopProfilePhoto = topProfilePhotoEnabled && Boolean(topProfilePhotoUrl);
   const showLegacyHeaderAvatar = !showTopProfilePhoto;
 
   return (
     <div
-      className={`min-h-screen ${pageBgClass} px-2 pb-4 pt-3 sm:px-4 ${hasFloatingActions ? 'pb-28' : ''}`}
+      className={`relative min-h-screen overflow-hidden ${pageBgClass} px-2 pb-4 pt-3 sm:px-4 ${hasFloatingActions ? 'pb-28' : ''}`}
       style={pageThemeStyle}
       data-testid="public-profile-page"
     >
-      <div className="mx-auto w-full max-w-[560px]">
+      <div className="pointer-events-none absolute inset-0" style={pageOverlayStyle} />
+      <div className="relative z-10 mx-auto w-full max-w-[560px]">
         <Card className={`mb-4 overflow-hidden ${visualCardClassName}`} style={publicCardStyle}>
           {profile.profile_type === 'business' && showBusinessBanner && businessBannerUrl && (
             <div className="relative h-36 w-full border-b border-border/60">
@@ -1744,7 +1880,7 @@ export const PublicProfilePage = () => {
               <div className="absolute inset-0 bg-gradient-to-t from-black/30 to-transparent"></div>
             </div>
           )}
-          <CardHeader className="text-center pb-3" style={cardHeaderStyle}>
+          <CardHeader className={`text-center pb-3 ${isBoldTemplateCard ? 'text-slate-100' : ''}`} style={cardHeaderStyle}>
             {showLegacyHeaderAvatar && profile.profile_type === 'business' && businessLogoUrl ? (
               <div className="mx-auto -mt-12 mb-2">
                 <img
@@ -1786,7 +1922,7 @@ export const PublicProfilePage = () => {
               </div>
             )}
             {profile.profile_type === 'business' && businessSubtitle && (
-              <p className="text-sm text-muted-foreground mt-2">{businessSubtitle}</p>
+              <p className={`mt-2 text-sm ${isBoldTemplateCard ? 'text-slate-300' : 'text-muted-foreground'}`}>{businessSubtitle}</p>
             )}
             {showHighlightsByTemplate && headerHighlights.length > 0 && (
               <div className="mt-3 flex flex-wrap justify-center gap-1.5">
@@ -1798,23 +1934,23 @@ export const PublicProfilePage = () => {
               </div>
             )}
           </CardHeader>
-          <CardContent className="px-3 pb-4 pt-0 sm:px-4">
+          <CardContent className={`px-3 pb-4 pt-0 sm:px-4 ${isBoldTemplateCard ? 'text-slate-100' : ''}`}>
             {renderer()}
           </CardContent>
         </Card>
 
         {mapEmbedUrl && (
           <Card className={`mb-4 overflow-hidden ${visualCardClassName}`} style={publicCardStyle}>
-            <CardHeader className="pb-2">
+            <CardHeader className={`pb-2 ${isBoldTemplateCard ? 'text-slate-100' : ''}`}>
               <CardTitle className="text-base flex items-center gap-2">
                 <MapPin className="h-4 w-4" />
                 Ubicación
               </CardTitle>
               {mapAddressLabel && (
-                <p className="text-xs text-muted-foreground">{mapAddressLabel}</p>
+                <p className={`text-xs ${isBoldTemplateCard ? 'text-slate-300' : 'text-muted-foreground'}`}>{mapAddressLabel}</p>
               )}
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className={`space-y-3 ${isBoldTemplateCard ? 'text-slate-100' : ''}`}>
               <div className="overflow-hidden rounded-xl border border-border/70">
                 <iframe
                   src={mapEmbedUrl}
@@ -1951,7 +2087,7 @@ export const PublicProfilePage = () => {
                   className="h-12 px-3 rounded-xl text-xs font-semibold sm:text-sm"
                   variant={action.type === 'location' || action.type === 'send_location' ? 'default' : 'outline'}
                   onClick={() => handleActionClick(action)}
-                  style={(action.type === 'location' || action.type === 'send_location') ? floatingPrimaryStyle : floatingOutlineStyle}
+                  style={(action.type === 'location' || action.type === 'send_location') ? floatingPrimaryStyle : floatingOutlineButtonStyle}
                 >
                   {renderActionIcon(action.type)}
                   <span className="truncate">{action.label || 'Abrir'}</span>
@@ -1961,7 +2097,7 @@ export const PublicProfilePage = () => {
           </div>
         )}
 
-        <p className="text-center text-xs text-muted-foreground mt-4 pb-4">
+        <p className={`mt-4 pb-4 text-center text-xs ${isBoldTemplateCard ? 'text-slate-300' : 'text-muted-foreground'}`}>
           Powered by QR Profiles
         </p>
       </div>

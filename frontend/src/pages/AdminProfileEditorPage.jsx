@@ -766,9 +766,9 @@ export const AdminProfileEditorPage = () => {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="elegant">Elegante</SelectItem>
-                          <SelectItem value="bold">Atrevido</SelectItem>
-                          <SelectItem value="glass">Glass</SelectItem>
+                          <SelectItem value="elegant">Elegante (limpio)</SelectItem>
+                          <SelectItem value="bold">Atrevido (oscuro)</SelectItem>
+                          <SelectItem value="glass">Glass (translúcido)</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>

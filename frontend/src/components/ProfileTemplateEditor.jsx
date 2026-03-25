@@ -23,6 +23,7 @@ const FIELD_TYPES = [
   { value: 'email', label: 'Email', icon: Mail },
   { value: 'number', label: 'Número', icon: Hash },
   { value: 'url', label: 'URL', icon: Link },
+  { value: 'map', label: 'Mapa', icon: MapPin },
   { value: 'image', label: 'Imagen', icon: Camera },
   { value: 'select', label: 'Selección', icon: List },
   { value: 'date', label: 'Fecha', icon: Calendar },
@@ -89,6 +90,15 @@ const DEFAULT_FIELD = () => ({
   visible: true,
   icon: 'none',
 });
+const MAP_FIELD_PRESET = {
+  name: 'map_address',
+  label: 'Ubicación en mapa',
+  type: 'map',
+  placeholder: 'Dirección, coordenadas o URL de Google Maps',
+  required: false,
+  visible: true,
+  icon: 'map-pin',
+};
 
 export const ProfileTemplateEditor = ({ template, onChange }) => {
   const [expandedSection, setExpandedSection] = useState(null);
@@ -172,11 +182,36 @@ export const ProfileTemplateEditor = ({ template, onChange }) => {
     setExpandedSection(newIdx);
   };
 
+  const createUniqueFieldForSection = (sectionFields = [], fieldOverrides = {}) => {
+    const field = { ...DEFAULT_FIELD(), ...fieldOverrides };
+    const baseName = String(field.name || '').trim() || `campo_${Date.now()}`;
+    const existingNames = new Set(
+      sectionFields
+        .map((existingField) => String(existingField?.name || '').trim())
+        .filter(Boolean)
+    );
+    let uniqueName = baseName;
+    let suffix = 2;
+    while (existingNames.has(uniqueName)) {
+      uniqueName = `${baseName}_${suffix}`;
+      suffix += 1;
+    }
+    return { ...field, name: uniqueName };
+  };
+
   const addField = (sectionIdx) => {
     const newSections = [...sections];
     const section = newSections[sectionIdx];
     const fields = Array.isArray(section?.fields) ? section.fields : [];
-    newSections[sectionIdx] = { ...section, fields: [...fields, DEFAULT_FIELD()] };
+    newSections[sectionIdx] = { ...section, fields: [...fields, createUniqueFieldForSection(fields)] };
+    updateTemplate({ sections: newSections });
+  };
+
+  const addMapField = (sectionIdx) => {
+    const newSections = [...sections];
+    const section = newSections[sectionIdx];
+    const fields = Array.isArray(section?.fields) ? section.fields : [];
+    newSections[sectionIdx] = { ...section, fields: [...fields, createUniqueFieldForSection(fields, MAP_FIELD_PRESET)] };
     updateTemplate({ sections: newSections });
   };
 
@@ -510,21 +545,38 @@ export const ProfileTemplateEditor = ({ template, onChange }) => {
                           </div>
                         )}
                       </div>
+                      {effectiveFieldType === 'map' && (
+                        <p className="pl-5 text-[10px] text-muted-foreground">
+                          Campo de mapa: permite ingresar dirección, coordenadas o URL de Google Maps.
+                        </p>
+                      )}
                     </div>
                   );
                 })}
 
                 {/* Add field button */}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="w-full h-8 text-xs border-dashed"
-                  onClick={() => addField(sIdx)}
-                  data-testid={`add-field-btn-${sIdx}`}
-                >
-                  <Plus className="mr-1 h-3 w-3" />
-                  Agregar Campo
-                </Button>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs border-dashed"
+                    onClick={() => addField(sIdx)}
+                    data-testid={`add-field-btn-${sIdx}`}
+                  >
+                    <Plus className="mr-1 h-3 w-3" />
+                    Agregar Campo
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs border-dashed"
+                    onClick={() => addMapField(sIdx)}
+                    data-testid={`add-map-field-btn-${sIdx}`}
+                  >
+                    <MapPin className="mr-1 h-3 w-3" />
+                    Agregar Mapa
+                  </Button>
+                </div>
               </CardContent>
             )}
           </Card>
